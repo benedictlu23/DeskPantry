@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import crypto from 'crypto';
-import express, { Request, Response } from 'express';
+import express from 'express';
+import type { Request, Response } from 'express';
 import fs from 'fs';
 import http from 'http';
 import path from 'path';

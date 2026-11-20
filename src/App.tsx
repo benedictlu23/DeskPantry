@@ -192,8 +192,13 @@ export default function App() {
     state.currentRole === UserRole.Admin || state.currentRole === UserRole.SuperAdmin;
   const canViewDeliveryNav =
     state.currentRole === UserRole.DeliveryStaff || isAdminOrSuper;
+  const canViewPautanganNav = Boolean(
+    currentUser &&
+      currentUser.pautanganEnabled &&
+      (state.pautanganSettings.globalEnabled || state.currentRole === UserRole.SuperAdmin)
+  );
 
-  // Guard restricted views if role switches away
+  // Guard restricted views if role switches away or access is revoked
   useEffect(() => {
     if (activeSection === 'admin' && !isAdminOrSuper) {
       setActiveSection('store');
@@ -201,7 +206,10 @@ export default function App() {
     if (activeSection === 'delivery' && !canViewDeliveryNav) {
       setActiveSection('store');
     }
-  }, [activeSection, isAdminOrSuper, canViewDeliveryNav]);
+    if (activeSection === 'pautangan' && !canViewPautanganNav) {
+      setActiveSection('store');
+    }
+  }, [activeSection, isAdminOrSuper, canViewDeliveryNav, canViewPautanganNav]);
 
   const nextDueLabel = useMemo(
     () => getNextDueDateLabel(state.pautanganSettings.dueDays),
@@ -275,8 +283,8 @@ export default function App() {
       department: 'Department Staff',
       role: UserRole.Member,
       debtBalance: 0,
-      pautanganEnabled: true,
-      pautanganLimit: 3000,
+      pautanganEnabled: false,
+      pautanganLimit: 0,
       avatarInitials: initials || 'DP',
       totalSpent: 0,
     };
@@ -337,8 +345,8 @@ export default function App() {
         department: 'Department Staff',
         role: UserRole.Member,
         debtBalance: 0,
-        pautanganEnabled: true,
-        pautanganLimit: 3000,
+        pautanganEnabled: false,
+        pautanganLimit: 0,
         avatarInitials: initials || 'DP',
         avatarUrl: profile.avatarUrl || undefined,
         totalSpent: 0,
@@ -1300,7 +1308,9 @@ export default function App() {
       icon: Users,
       badge: state.unreadCommunityCount,
     },
-    { id: 'pautangan', label: 'Pautangan', icon: HandCoins },
+    ...(canViewPautanganNav
+      ? [{ id: 'pautangan' as ActiveSection, label: 'Pautangan', icon: HandCoins }]
+      : []),
     { id: 'ledger', label: 'My Ledger', icon: LayoutDashboard },
     ...(canViewDeliveryNav
       ? [
@@ -1508,7 +1518,7 @@ export default function App() {
     { id: 'store', label: 'Store', badge: 0 },
     { id: 'ewallet', label: 'Buy/Sell E-Wallet', badge: openEWalletCount },
     { id: 'community', label: 'Community', badge: state.unreadCommunityCount },
-    { id: 'pautangan', label: 'Pautangan', badge: 0 },
+    ...(canViewPautanganNav ? [{ id: 'pautangan', label: 'Pautangan', badge: 0 }] : []),
     ...(canViewDeliveryNav
       ? [{ id: 'delivery', label: 'Delivery', badge: pendingDeliveriesCount }]
       : []),
@@ -1939,7 +1949,7 @@ export default function App() {
             />
           )}
 
-          {activeSection === 'pautangan' && (
+          {activeSection === 'pautangan' && canViewPautanganNav && (
             <PautanganView
               settings={state.pautanganSettings}
               loans={state.loans}
@@ -2246,7 +2256,9 @@ export default function App() {
             icon: Users,
             badge: state.unreadCommunityCount,
           },
-          { id: 'pautangan', label: 'Loan', icon: HandCoins, badge: 0 },
+          ...(canViewPautanganNav
+            ? [{ id: 'pautangan', label: 'Loan', icon: HandCoins, badge: 0 }]
+            : []),
           ...(canViewDeliveryNav
             ? [{ id: 'delivery', label: 'Delivery', icon: Truck, badge: pendingDeliveriesCount }]
             : [{ id: 'ledger', label: 'Ledger', icon: LayoutDashboard, badge: 0 }]),

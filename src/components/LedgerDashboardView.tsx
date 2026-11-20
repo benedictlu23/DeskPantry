@@ -214,8 +214,14 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
         </div>
       )}
 
-      {/* Simple 4-Box Summary — Easy for Anyone to Understand */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5 sm:gap-4">
+      {/* Simple Summary — Easy for Anyone to Understand */}
+      <div
+        className={`grid grid-cols-1 sm:grid-cols-2 ${
+          currentUser.pautanganEnabled || userActiveLoanBal > 0
+            ? 'lg:grid-cols-4'
+            : 'lg:grid-cols-3'
+        } gap-3.5 sm:gap-4`}
+      >
         {/* Card 1: Store Utang */}
         <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] p-4 sm:p-5 flex flex-col justify-between gap-3">
           <div>
@@ -248,38 +254,46 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
           )}
         </div>
 
-        {/* Card 2: Cash Loan */}
-        <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] p-4 sm:p-5">
-          <div className="text-xs font-semibold text-stone-500 dark:text-stone-400">
-            2. Cash Loan Left (Pautangan)
+        {/* Card 2: Cash Loan (only shown when Pautangan is enabled for user or user has an active loan) */}
+        {(currentUser.pautanganEnabled || userActiveLoanBal > 0) && (
+          <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] p-4 sm:p-5">
+            <div className="text-xs font-semibold text-stone-500 dark:text-stone-400">
+              2. Cash Loan Left (Pautangan)
+            </div>
+            <div className="mt-1.5 text-2xl font-extrabold text-stone-900 dark:text-stone-100 font-mono tabular-nums">
+              {formatPHP(userActiveLoanBal, true)}
+            </div>
+            <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">
+              {userActiveLoanBal > 0
+                ? `From your ${formatPHP(currentUser.pautanganLimit)} loan limit.`
+                : `No active cash loan. Limit: ${formatPHP(currentUser.pautanganLimit)}.`}
+            </p>
           </div>
-          <div className="mt-1.5 text-2xl font-extrabold text-stone-900 dark:text-stone-100 font-mono tabular-nums">
-            {formatPHP(userActiveLoanBal, true)}
-          </div>
-          <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">
-            {userActiveLoanBal > 0
-              ? `From your ${formatPHP(currentUser.pautanganLimit)} loan limit.`
-              : `No active cash loan. Limit: ${formatPHP(currentUser.pautanganLimit)}.`}
-          </p>
-        </div>
+        )}
 
         {/* Card 3: Total Combined */}
         <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] p-4 sm:p-5">
           <div className="text-xs font-semibold text-stone-500 dark:text-stone-400">
-            3. Total Money to Pay Back
+            {currentUser.pautanganEnabled || userActiveLoanBal > 0
+              ? '3. Total Money to Pay Back'
+              : '2. Total Money to Pay Back'}
           </div>
           <div className="mt-1.5 text-2xl font-extrabold text-teal-700 dark:text-teal-400 font-mono tabular-nums">
             {formatPHP(totalOwed, true)}
           </div>
           <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">
-            Store utang + cash loan combined.
+            {currentUser.pautanganEnabled || userActiveLoanBal > 0
+              ? 'Store utang + cash loan combined.'
+              : 'Current store credit balance.'}
           </p>
         </div>
 
         {/* Card 4: Activity */}
         <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] p-4 sm:p-5">
           <div className="text-xs font-semibold text-stone-500 dark:text-stone-400">
-            4. My Orders &amp; Receipts
+            {currentUser.pautanganEnabled || userActiveLoanBal > 0
+              ? '4. My Orders & Receipts'
+              : '3. My Orders & Receipts'}
           </div>
           <div className="mt-1.5 text-2xl font-extrabold text-stone-900 dark:text-stone-100 font-mono tabular-nums">
             {userOrders.length} Orders
