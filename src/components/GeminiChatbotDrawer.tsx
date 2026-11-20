@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { AlertCircle, Bot, MessageSquare, Send, X } from 'lucide-react';
-import { PautanganSettings, StoreItem, UserAccount, UserRole } from '../types';
+import { StoreItem, UserAccount, UserRole } from '../types';
 import { ChatbotPersona } from './ChatHubView';
 
 interface FloatingMessage {
@@ -14,7 +14,7 @@ interface GeminiChatbotDrawerProps {
   currentUser: UserAccount | null;
   currentRole: UserRole;
   storeItems: StoreItem[];
-  pautanganSettings: PautanganSettings;
+  dueDays: [number, number];
   pendingProofsCount: number;
 }
 
@@ -22,7 +22,7 @@ export const GeminiChatbotDrawer: React.FC<GeminiChatbotDrawerProps> = ({
   currentUser,
   currentRole,
   storeItems,
-  pautanganSettings,
+  dueDays,
   pendingProofsCount,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
@@ -34,7 +34,7 @@ export const GeminiChatbotDrawer: React.FC<GeminiChatbotDrawerProps> = ({
     {
       id: 'init-1',
       role: 'model',
-      text: 'Hi! I am DeskPantry Assistant. Choose a persona above and ask about items, ₱ prices, 15th/30th cutoffs, or Pautangan loans.',
+      text: 'Hi! I am DeskPantry Assistant. Choose a persona above and ask about items, ₱ prices, store credit balances, or 15th/30th cutoffs.',
       timestamp: 'Now',
     },
   ]);
@@ -82,8 +82,7 @@ export const GeminiChatbotDrawer: React.FC<GeminiChatbotDrawerProps> = ({
             userName: currentUser?.name ?? 'Visitor',
             userRole: currentRole,
             debtBalance: currentUser?.debtBalance ?? 0,
-            pautanganRate: pautanganSettings.monthlyInterestRate,
-            dueDays: pautanganSettings.dueDays,
+            dueDays,
             catalogSummary,
             pendingProofsCount,
           },
@@ -214,7 +213,7 @@ export const GeminiChatbotDrawer: React.FC<GeminiChatbotDrawerProps> = ({
               type="text"
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="Ask about snacks, debt, or loans..."
+              placeholder="Ask about snacks, prices, or store balance..."
               className="flex-1 min-h-[40px] rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-[#172523] px-3 py-1.5 text-xs text-stone-900 dark:text-stone-100 focus:border-teal-700 focus:outline-none"
             />
             <button

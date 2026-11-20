@@ -133,7 +133,25 @@ function getInitialState(): PersistedState {
     try {
       const saved = window.localStorage.getItem(STORAGE_KEY);
       if (saved) {
-        return { ...buildDefaultState(), ...(JSON.parse(saved) as Partial<PersistedState>) };
+        const merged = { ...buildDefaultState(), ...(JSON.parse(saved) as Partial<PersistedState>) };
+        merged.threads = merged.threads.map((t) => {
+          if (t.id !== 'thread-ai') return t;
+          return {
+            ...t,
+            subtitle: t.subtitle.includes('Pautangan')
+              ? 'Gemini Assistant · Store Stock & Ledger Help'
+              : t.subtitle,
+            messages: t.messages.map((m) =>
+              m.id === 'm-ai-1' && m.text.includes('Pautangan')
+                ? {
+                    ...m,
+                    text: 'Kumusta! Ask me about current pantry stock, your 15th/30th store debt balance, payment proof uploads, or snack recommendations.',
+                  }
+                : m
+            ),
+          };
+        });
+        return merged;
       }
     } catch {
       // Ignore corrupt storage and fall back to seed data
@@ -2161,7 +2179,7 @@ export default function App() {
               currentUser={currentUser}
               currentRole={state.currentRole}
               storeItems={state.items}
-              pautanganSettings={state.pautanganSettings}
+              dueDays={state.pautanganSettings.dueDays}
               pendingProofsCount={pendingProofsCount}
               onOpenSignIn={() => setIsSignInOpen(true)}
               onSendMessage={handleSendMessage}
@@ -2270,7 +2288,7 @@ export default function App() {
         currentUser={currentUser}
         currentRole={state.currentRole}
         storeItems={state.items}
-        pautanganSettings={state.pautanganSettings}
+        dueDays={state.pautanganSettings.dueDays}
         pendingProofsCount={pendingProofsCount}
       />
 

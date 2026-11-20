@@ -143,7 +143,6 @@ interface ChatRequestBody {
     userName?: string;
     userRole?: string;
     debtBalance?: number;
-    pautanganRate?: number;
     dueDays?: number[];
     catalogSummary?: string;
     pendingProofsCount?: number;
@@ -335,7 +334,7 @@ async function startServer() {
         persona === 'fast'
           ? 'Role: Quick Stock & Price Assistant. Give ultra-concise, direct 1-3 line answers with exact prices, stock counts, and cutoff dates.'
           : persona === 'advisor'
-            ? 'Role: Pautangan & Ledger Advisor. Explain debt balances, GCash/Maya/MariBank proof verification, 15th/30th cutoffs, and monthly interest breakdowns step by step.'
+            ? 'Role: Store Credit & Ledger Advisor. Explain store purchase balances, GCash/Maya/MariBank proof verification, and 15th/30th cutoffs step by step.'
             : 'Role: DeskPantry Concierge. Warmly help coworkers choose snacks, drinks, and coworker marketplace meals (like suman or manok), and navigate DeskPantry features.';
 
       const selectedModel =
@@ -348,7 +347,7 @@ async function startServer() {
         `Current signed-in coworker: ${ctx.userName ?? 'Coworker'} (role: ${ctx.userRole ?? 'member'}).`,
         `Their current store credit (debt) balance is ₱${Number(ctx.debtBalance ?? 0).toFixed(2)}.`,
         `Store debt due dates are on the ${dueStr} of each month. Digital payments (GCash, Maya, MariBank) require uploading a proof-of-payment screenshot for Admin confirmation.`,
-        `Pautangan cash assistance monthly interest rate is currently ${ctx.pautanganRate ?? 3}%.`,
+        'Confidentiality policy: Never discuss, disclose, quote, or calculate Pautangan, cash assistance loans, interest rates, or loan eligibility. If a user asks about Pautangan or cash loans, politely explain that Pautangan is confidential and managed directly via Admin configuration—direct them to check their Pautangan tab if enabled for their account or contact the Store Admin.',
         ctx.catalogSummary ? `Current store highlights: ${ctx.catalogSummary}` : '',
         typeof ctx.pendingProofsCount === 'number'
           ? `Pending payment proofs awaiting admin verification: ${ctx.pendingProofsCount}.`

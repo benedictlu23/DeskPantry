@@ -1,16 +1,19 @@
 import React, { useMemo, useState } from 'react';
 import {
+  CalendarClock,
   CheckCircle2,
   Minus,
+  PackageCheck,
   Plus,
   QrCode,
   Search,
   ShoppingBag,
   Trash2,
   Upload,
+  Wallet,
   X,
 } from 'lucide-react';
-import { HERO_IMAGE, SAMPLE_RECEIPT_DATA_URL } from '../data/seedData';
+import { SAMPLE_RECEIPT_DATA_URL } from '../data/seedData';
 import {
   CartItem,
   FulfillmentType,
@@ -194,12 +197,6 @@ export const StorefrontView: React.FC<StorefrontViewProps> = ({
 
   return (
     <div className="space-y-8">
-      {storeConfig.storeAnnouncement && (
-        <div className="rounded-xl border border-teal-200 dark:border-teal-800/70 bg-teal-50/70 dark:bg-teal-950/40 px-4 py-2.5 text-xs font-medium text-teal-900 dark:text-teal-200">
-          {storeConfig.storeAnnouncement}
-        </div>
-      )}
-
       {orderBanner && (
         <div className="flex items-center justify-between gap-3 rounded-xl border border-emerald-200 dark:border-emerald-800/70 bg-emerald-50 dark:bg-emerald-950/50 px-4 py-3 text-sm text-emerald-900 dark:text-emerald-200">
           <div className="flex items-center gap-2.5">
@@ -216,102 +213,148 @@ export const StorefrontView: React.FC<StorefrontViewProps> = ({
         </div>
       )}
 
-      {/* Daylight / Dark Storefront Hero */}
-      <section className="daylight-hero-surface rounded-2xl border border-stone-200 dark:border-stone-800 overflow-hidden">
-        <div className="grid grid-cols-1 lg:grid-cols-12 items-stretch">
-          <div className="lg:col-span-7 p-6 sm:p-8 lg:p-10 flex flex-col justify-between gap-6">
-            <div>
-              <p className="text-xs font-medium text-teal-700 dark:text-teal-400 tracking-wide">
-                Department Office Store · Pickup &amp; Desk Delivery
-              </p>
-              <h1 className="mt-2 text-3xl sm:text-4xl font-extrabold tracking-tight text-stone-900 dark:text-stone-100 [text-wrap:balance]">
-                Fresh pantry snacks, coffee &amp; daily essentials at your desk.
-              </h1>
-              <p className="mt-3 text-base text-stone-600 dark:text-stone-300 max-w-xl leading-relaxed">
-                Browse live shelf inventory, pay with{' '}
-                {enabledMethods.map((m) => m.title).join(', ')}, and settle store credit every{' '}
-                {dueDays[0]}th and {dueDays[1]}th.
-              </p>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-3">
-              {isGuest ? (
-                <button
-                  type="button"
-                  onClick={onOpenSignIn}
-                  className="min-h-[44px] inline-flex items-center justify-center rounded-xl bg-teal-700 px-5 py-2.5 text-sm font-semibold text-white hover:bg-teal-800 transition-colors cursor-pointer"
-                >
-                  Sign In with Gmail to Order
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setIsCartOpen(true)}
-                  className="min-h-[44px] inline-flex items-center justify-center gap-2 rounded-xl bg-teal-700 px-5 py-2.5 text-sm font-semibold text-white hover:bg-teal-800 transition-colors cursor-pointer"
-                >
-                  <ShoppingBag className="w-4 h-4" />
-                  <span>Open Cart ({cart.reduce((s, c) => s + c.quantity, 0)})</span>
-                </button>
-              )}
-
-              <button
-                type="button"
-                onClick={onOpenQRShare}
-                className="min-h-[44px] inline-flex items-center justify-center gap-2 rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-[#172523] px-4 py-2.5 text-sm font-medium text-stone-700 dark:text-stone-200 hover:bg-stone-50 dark:hover:bg-[#1F312E] transition-colors cursor-pointer"
-              >
-                <QrCode className="w-4 h-4 text-teal-700 dark:text-teal-400" />
-                <span>Share QR Code</span>
-              </button>
-            </div>
+      {/* Top Highlighted Info Cards: Available SKUs, Next Debt Cut-off, and Debt Balance */}
+      <section className="space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-stone-900 dark:text-stone-100">
+              Order Snacks &amp; Drinks
+            </h1>
+            <p className="mt-1 text-sm text-stone-600 dark:text-stone-400">
+              Tap <strong className="text-stone-900 dark:text-stone-100">+ Add</strong> on what you want, then open your Cart to pick up or deliver to your desk.
+            </p>
           </div>
 
-          <div className="lg:col-span-5 min-h-[220px] lg:min-h-[320px] relative border-t lg:border-t-0 lg:border-l border-stone-200 dark:border-stone-800">
-            <ProductImage
-              src={HERO_IMAGE}
-              alt="DeskPantry office pantry counter stocked with iced coffee and snacks"
-              title="DeskPantry Counter"
-              className="w-full h-full lg:h-full object-cover"
-            />
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            {isGuest ? (
+              <button
+                type="button"
+                onClick={onOpenSignIn}
+                className="min-h-[44px] inline-flex items-center justify-center rounded-xl bg-teal-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-teal-800 transition-colors cursor-pointer"
+              >
+                Sign In to Order
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setIsCartOpen(true)}
+                className="min-h-[44px] inline-flex items-center justify-center gap-2 rounded-xl bg-teal-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-teal-800 transition-colors cursor-pointer"
+              >
+                <ShoppingBag className="w-4 h-4" />
+                <span>
+                  Open Cart ({cart.reduce((s, c) => s + c.quantity, 0)})
+                </span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={onOpenQRShare}
+              className="min-h-[44px] inline-flex items-center justify-center gap-2 rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-[#121D1B] px-3.5 py-2.5 text-xs sm:text-sm font-semibold text-stone-700 dark:text-stone-200 hover:bg-stone-50 dark:hover:bg-[#172523] transition-colors cursor-pointer"
+            >
+              <QrCode className="w-4 h-4 text-teal-700 dark:text-teal-400" />
+              <span>Share QR</span>
+            </button>
           </div>
         </div>
 
-        {/* 4-Column KPI Strip */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 border-t border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] divide-y lg:divide-y-0 divide-x divide-stone-200 dark:divide-stone-800">
-          <div className="p-4 sm:px-6">
-            <div className="text-xs text-stone-500 dark:text-stone-400">Available SKUs</div>
-            <div className="mt-1 text-lg font-bold text-stone-900 dark:text-stone-100 tabular-nums">
-              {items.filter((i) => i.stock > 0).length} Items Ready
+        {/* Highlighted 3-Card Top Strip */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
+          {/* Card 1: Available SKUs */}
+          <div className="rounded-2xl border border-teal-200 dark:border-teal-800/70 bg-teal-50/70 dark:bg-teal-950/35 p-4 sm:p-5 flex items-center gap-3.5">
+            <div className="w-11 h-11 rounded-xl bg-teal-700 text-white flex items-center justify-center shrink-0">
+              <PackageCheck className="w-5 h-5" />
+            </div>
+            <div className="min-w-0">
+              <div className="text-xs font-semibold text-teal-800 dark:text-teal-300">
+                Available Items (SKUs)
+              </div>
+              <div className="mt-0.5 text-xl sm:text-2xl font-extrabold text-stone-900 dark:text-stone-100 tabular-nums">
+                {items.filter((i) => i.stock > 0).length} Ready
+              </div>
+              <div className="text-xs text-stone-600 dark:text-stone-400">
+                In stock on the shelf today
+              </div>
             </div>
           </div>
-          <div className="p-4 sm:px-6">
-            <div className="text-xs text-stone-500 dark:text-stone-400">Next Debt Cutoff</div>
-            <div className="mt-1 text-lg font-bold text-stone-900 dark:text-stone-100 tabular-nums">
-              {nextDueLabel} ({dueDays[0]}th / {dueDays[1]}th)
+
+          {/* Card 2: Next Debt Cut-off */}
+          <div className="rounded-2xl border border-sky-200 dark:border-sky-800/70 bg-sky-50/70 dark:bg-sky-950/30 p-4 sm:p-5 flex items-center gap-3.5">
+            <div className="w-11 h-11 rounded-xl bg-sky-600 text-white flex items-center justify-center shrink-0">
+              <CalendarClock className="w-5 h-5" />
+            </div>
+            <div className="min-w-0">
+              <div className="text-xs font-semibold text-sky-800 dark:text-sky-300">
+                Next Debt Cut-off
+              </div>
+              <div className="mt-0.5 text-xl sm:text-2xl font-extrabold text-stone-900 dark:text-stone-100 tabular-nums">
+                {nextDueLabel}
+              </div>
+              <div className="text-xs text-stone-600 dark:text-stone-400">
+                Paydays every {dueDays[0]}th &amp; {dueDays[1]}th
+              </div>
             </div>
           </div>
-          <div className="p-4 sm:px-6">
-            <div className="text-xs text-stone-500 dark:text-stone-400">Digital Wallets</div>
-            <div className="mt-1 text-lg font-bold text-stone-900 dark:text-stone-100 truncate">
-              {enabledMethods
-                .filter((m) => m.type === 'digital')
-                .map((m) => m.title)
-                .join(' · ') || 'Cash & Debt'}
+
+          {/* Card 3: My Debt Balance */}
+          <div
+            className={`rounded-2xl border p-4 sm:p-5 flex items-center gap-3.5 ${
+              !isGuest && currentUser.debtBalance > 0
+                ? 'border-amber-300 dark:border-amber-800/80 bg-amber-50/80 dark:bg-amber-950/35'
+                : 'border-emerald-200 dark:border-emerald-800/70 bg-emerald-50/70 dark:bg-emerald-950/30'
+            }`}
+          >
+            <div
+              className={`w-11 h-11 rounded-xl text-white flex items-center justify-center shrink-0 ${
+                !isGuest && currentUser.debtBalance > 0 ? 'bg-amber-600' : 'bg-emerald-600'
+              }`}
+            >
+              <Wallet className="w-5 h-5" />
             </div>
-          </div>
-          <div className="p-4 sm:px-6">
-            <div className="text-xs text-stone-500 dark:text-stone-400">
-              {isGuest ? 'Visitor Access' : 'Your Debt Balance'}
-            </div>
-            <div className="mt-1 text-lg font-bold text-stone-900 dark:text-stone-100 tabular-nums">
-              {isGuest ? 'Browse Only' : formatPHP(currentUser.debtBalance, true)}
+            <div className="min-w-0">
+              <div
+                className={`text-xs font-semibold ${
+                  !isGuest && currentUser.debtBalance > 0
+                    ? 'text-amber-800 dark:text-amber-300'
+                    : 'text-emerald-800 dark:text-emerald-300'
+                }`}
+              >
+                {isGuest ? 'Your Debt Balance' : 'My Debt Balance'}
+              </div>
+              <div className="mt-0.5 text-xl sm:text-2xl font-extrabold text-stone-900 dark:text-stone-100 font-mono tabular-nums">
+                {isGuest ? 'Sign In' : formatPHP(currentUser.debtBalance, true)}
+              </div>
+              <div className="text-xs text-stone-600 dark:text-stone-400">
+                {isGuest
+                  ? 'Sign in to order or pay later'
+                  : currentUser.debtBalance > 0
+                    ? `Due by ${nextDueLabel}`
+                    : 'All paid up!'}
+              </div>
             </div>
           </div>
         </div>
       </section>
 
-      {/* Catalog Controls */}
+      {/* Catalog Controls & Simple Grid */}
       <section className="space-y-5">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        {!isGuest && cart.length > 0 && (
+          <div className="rounded-2xl border border-teal-300 dark:border-teal-700 bg-teal-50 dark:bg-teal-950/45 px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="text-sm font-medium text-teal-950 dark:text-teal-100">
+              You have <strong>{cart.reduce((s, c) => s + c.quantity, 0)} item(s)</strong> in your cart (
+              <span className="font-mono font-bold tabular-nums">{formatPHP(itemsSubtotal, true)}</span>). Ready to finish your order?
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsCartOpen(true)}
+              className="min-h-[42px] px-4 py-2 rounded-xl bg-teal-700 text-xs sm:text-sm font-bold text-white hover:bg-teal-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              Go to Checkout →
+            </button>
+          </div>
+        )}
+
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3.5">
           <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0">
             {categoryList.map((category) => {
               const active = selectedCategory === category;
@@ -320,7 +363,7 @@ export const StorefrontView: React.FC<StorefrontViewProps> = ({
                   key={category}
                   type="button"
                   onClick={() => setSelectedCategory(category)}
-                  className={`min-h-[40px] px-3.5 py-2 rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+                  className={`min-h-[40px] px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
                     active
                       ? 'bg-stone-900 dark:bg-teal-600 text-white'
                       : 'bg-white dark:bg-[#121D1B] border border-stone-200 dark:border-stone-800 text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white hover:bg-stone-50 dark:hover:bg-[#172523]'
@@ -338,8 +381,8 @@ export const StorefrontView: React.FC<StorefrontViewProps> = ({
               type="search"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search snacks, coffee, essentials..."
-              className="w-full min-h-[42px] rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] pl-9 pr-3 py-2 text-sm text-stone-900 dark:text-stone-100 placeholder:text-stone-400 focus:border-teal-700 focus:outline-none"
+              placeholder="Search snacks, drinks, noodles..."
+              className="w-full min-h-[44px] rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] pl-9 pr-3 py-2 text-sm text-stone-900 dark:text-stone-100 placeholder:text-stone-400 focus:border-teal-700 focus:outline-none"
             />
           </div>
         </div>
@@ -348,10 +391,10 @@ export const StorefrontView: React.FC<StorefrontViewProps> = ({
         {filteredItems.length === 0 ? (
           <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] p-10 text-center">
             <p className="text-sm font-semibold text-stone-900 dark:text-stone-100">
-              No pantry items match your filter.
+              No items found.
             </p>
             <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">
-              Try clearing your search or suggest a new item in the Community tab.
+              Try tapping "All" or clearing your search box.
             </p>
             <button
               type="button"
@@ -359,13 +402,13 @@ export const StorefrontView: React.FC<StorefrontViewProps> = ({
                 setSelectedCategory('All');
                 setSearchQuery('');
               }}
-              className="mt-4 min-h-[40px] rounded-lg border border-stone-200 dark:border-stone-700 px-4 py-2 text-xs font-semibold text-stone-700 dark:text-stone-200 hover:bg-stone-50 dark:hover:bg-[#172523] cursor-pointer"
+              className="mt-4 min-h-[42px] rounded-xl border border-stone-200 dark:border-stone-700 px-4 py-2 text-xs font-semibold text-stone-700 dark:text-stone-200 hover:bg-stone-50 dark:hover:bg-[#172523] cursor-pointer"
             >
-              Reset Filters
+              Show All Items
             </button>
           </div>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
             {filteredItems.map((item) => {
               const inCartQty = cart.find((c) => c.itemId === item.id)?.quantity ?? 0;
               const outOfStock = item.stock <= 0;
@@ -385,21 +428,21 @@ export const StorefrontView: React.FC<StorefrontViewProps> = ({
                       />
                     </div>
 
-                    <div className="p-5">
+                    <div className="p-4 sm:p-5">
                       <div className="flex items-center gap-2 text-xs text-stone-500 dark:text-stone-400">
                         <span>{item.category}</span>
                         <span aria-hidden="true">·</span>
                         <span
                           className={
-                            item.stock <= 5
-                              ? 'text-amber-700 dark:text-amber-400 font-medium'
-                              : ''
+                            outOfStock
+                              ? 'text-red-600 dark:text-red-400 font-semibold'
+                              : item.stock <= 5
+                                ? 'text-amber-700 dark:text-amber-400 font-semibold'
+                                : 'text-emerald-700 dark:text-emerald-400 font-medium'
                           }
                         >
-                          {outOfStock ? 'Out of stock' : `${item.stock} left`}
+                          {outOfStock ? 'Sold out' : `${item.stock} available`}
                         </span>
-                        <span aria-hidden="true">·</span>
-                        <span className="tabular-nums">{item.soldCount} sold</span>
                       </div>
 
                       <h3 className="mt-1.5 text-base font-bold text-stone-900 dark:text-stone-100 leading-snug">
@@ -411,8 +454,8 @@ export const StorefrontView: React.FC<StorefrontViewProps> = ({
                     </div>
                   </div>
 
-                  <div className="px-5 pb-5 pt-2 flex items-center justify-between gap-3">
-                    <span className="text-lg font-bold text-stone-900 dark:text-stone-100 font-mono tabular-nums">
+                  <div className="px-4 sm:px-5 pb-4 sm:pb-5 pt-2 flex items-center justify-between gap-3">
+                    <span className="text-xl font-extrabold text-stone-900 dark:text-stone-100 font-mono tabular-nums">
                       {formatPHP(item.price)}
                     </span>
 
@@ -420,29 +463,29 @@ export const StorefrontView: React.FC<StorefrontViewProps> = ({
                       <button
                         type="button"
                         onClick={onOpenSignIn}
-                        className="min-h-[42px] px-4 py-2 rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-[#172523] text-xs font-semibold text-stone-700 dark:text-stone-200 hover:bg-teal-50 dark:hover:bg-teal-950/60 hover:text-teal-800 dark:hover:text-teal-300 hover:border-teal-200 dark:hover:border-teal-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                        className="min-h-[44px] px-4 py-2 rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-[#172523] text-xs font-bold text-stone-700 dark:text-stone-200 hover:bg-teal-50 dark:hover:bg-teal-950/60 hover:text-teal-800 dark:hover:text-teal-300 hover:border-teal-200 dark:hover:border-teal-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                       >
-                        Sign in to order
+                        Sign in to buy
                       </button>
                     ) : inCartQty > 0 ? (
                       <div className="flex items-center gap-1.5 rounded-xl border border-teal-200 dark:border-teal-800 bg-teal-50/70 dark:bg-teal-950/40 p-1">
                         <button
                           type="button"
                           onClick={() => onUpdateCartQty(item.id, -1)}
-                          className="min-h-[34px] min-w-[34px] flex items-center justify-center rounded-lg bg-white dark:bg-[#121D1B] text-stone-700 dark:text-stone-200 hover:bg-stone-100 dark:hover:bg-stone-800 cursor-pointer"
-                          aria-label={`Decrease ${item.name} quantity`}
+                          className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg bg-white dark:bg-[#121D1B] text-stone-700 dark:text-stone-200 hover:bg-stone-100 dark:hover:bg-stone-800 cursor-pointer"
+                          aria-label={`Remove one ${item.name}`}
                         >
                           <Minus className="w-3.5 h-3.5" />
                         </button>
-                        <span className="w-7 text-center text-xs font-bold text-teal-900 dark:text-teal-200 tabular-nums">
+                        <span className="min-w-[28px] text-center text-xs font-extrabold text-teal-900 dark:text-teal-200 tabular-nums">
                           {inCartQty}
                         </span>
                         <button
                           type="button"
                           disabled={inCartQty >= item.stock}
                           onClick={() => onUpdateCartQty(item.id, 1)}
-                          className="min-h-[34px] min-w-[34px] flex items-center justify-center rounded-lg bg-white dark:bg-[#121D1B] text-stone-700 dark:text-stone-200 hover:bg-stone-100 dark:hover:bg-stone-800 disabled:opacity-40 cursor-pointer"
-                          aria-label={`Increase ${item.name} quantity`}
+                          className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg bg-white dark:bg-[#121D1B] text-stone-700 dark:text-stone-200 hover:bg-stone-100 dark:hover:bg-stone-800 disabled:opacity-40 cursor-pointer"
+                          aria-label={`Add one more ${item.name}`}
                         >
                           <Plus className="w-3.5 h-3.5" />
                         </button>
@@ -452,9 +495,10 @@ export const StorefrontView: React.FC<StorefrontViewProps> = ({
                         type="button"
                         disabled={outOfStock}
                         onClick={() => onAddToCart(item.id)}
-                        className="min-h-[42px] px-4 py-2 rounded-xl bg-teal-700 text-xs font-semibold text-white hover:bg-teal-800 disabled:bg-stone-200 dark:disabled:bg-stone-800 disabled:text-stone-500 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                        className="min-h-[44px] px-4 py-2 rounded-xl bg-teal-700 text-xs sm:text-sm font-bold text-white hover:bg-teal-800 disabled:bg-stone-200 dark:disabled:bg-stone-800 disabled:text-stone-500 transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
                       >
-                        {outOfStock ? 'Restocking' : 'Add to Cart'}
+                        <Plus className="w-4 h-4" />
+                        <span>{outOfStock ? 'Sold Out' : 'Add'}</span>
                       </button>
                     )}
                   </div>
@@ -548,7 +592,7 @@ export const StorefrontView: React.FC<StorefrontViewProps> = ({
                   <form id="checkout-form" onSubmit={handleCheckoutSubmit} className="space-y-4">
                     <div>
                       <label className="block text-xs font-semibold text-stone-700 dark:text-stone-300 mb-2">
-                        Fulfillment Option
+                        1. How will you get your order?
                       </label>
                       <div className="grid grid-cols-2 gap-2">
                         {[FulfillmentType.Pickup, FulfillmentType.Delivery].map((type) => {
@@ -560,18 +604,18 @@ export const StorefrontView: React.FC<StorefrontViewProps> = ({
                               type="button"
                               disabled={disabled}
                               onClick={() => setFulfillment(type)}
-                              className={`min-h-[42px] rounded-xl border px-3 py-2 text-xs font-semibold transition-colors cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed ${
+                              className={`min-h-[44px] rounded-xl border px-3 py-2 text-xs font-semibold transition-colors cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed ${
                                 fulfillment === type
                                   ? 'border-teal-700 bg-teal-50 dark:bg-teal-950/60 text-teal-800 dark:text-teal-200'
                                   : 'border-stone-200 dark:border-stone-700 bg-white dark:bg-[#172523] text-stone-600 dark:text-stone-300 hover:bg-stone-50 dark:hover:bg-[#1F312E]'
                               }`}
                             >
                               {type === FulfillmentType.Pickup
-                                ? 'Pantry Pickup (Counter B)'
+                                ? 'Pick Up at Counter B'
                                 : storeConfig.deliveryEnabled
                                   ? storeConfig.deliveryFee > 0
-                                    ? `Desk Delivery (+${formatPHP(storeConfig.deliveryFee)} runner fee)`
-                                    : 'Desk Delivery (Free)'
+                                    ? `Deliver to Desk (+${formatPHP(storeConfig.deliveryFee)})`
+                                    : 'Deliver to Desk (Free)'
                                   : 'Delivery Disabled'}
                             </button>
                           );
@@ -582,18 +626,18 @@ export const StorefrontView: React.FC<StorefrontViewProps> = ({
                     {fulfillment === FulfillmentType.Delivery && (
                       <div className="space-y-2">
                         <label className="block text-xs font-semibold text-stone-700 dark:text-stone-300">
-                          Floor &amp; Desk / Pod Location
+                          Where is your desk?
                         </label>
                         <input
                           type="text"
                           value={deliveryNote}
                           onChange={(e) => setDeliveryNote(e.target.value)}
-                          placeholder="e.g. 4F Engineering Bay · Desk 08"
-                          className="w-full min-h-[42px] rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-[#172523] px-3 py-2 text-sm text-stone-900 dark:text-stone-100 focus:border-teal-700 focus:outline-none"
+                          placeholder="e.g. 4th Floor · Desk 08"
+                          className="w-full min-h-[44px] rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-[#172523] px-3 py-2 text-sm text-stone-900 dark:text-stone-100 focus:border-teal-700 focus:outline-none"
                         />
                         {storeConfig.deliveryFee > 0 && (
                           <p className="text-[11px] text-teal-700 dark:text-teal-400">
-                            {formatPHP(storeConfig.deliveryFee)} delivery fee goes 100% to our delivery staff as commission.
+                            {formatPHP(storeConfig.deliveryFee)} delivery fee goes 100% to our delivery runner.
                           </p>
                         )}
                       </div>
@@ -601,7 +645,7 @@ export const StorefrontView: React.FC<StorefrontViewProps> = ({
 
                     <div>
                       <label className="block text-xs font-semibold text-stone-700 dark:text-stone-300 mb-2">
-                        Payment Method
+                        2. How will you pay?
                       </label>
                       <div className="grid grid-cols-2 gap-2">
                         {enabledMethods.map((method) => (

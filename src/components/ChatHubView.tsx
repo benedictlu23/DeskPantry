@@ -11,7 +11,6 @@ import {
 } from 'lucide-react';
 import {
   ChatThread,
-  PautanganSettings,
   StoreItem,
   UserAccount,
   UserRole,
@@ -24,7 +23,7 @@ interface ChatHubViewProps {
   currentUser: UserAccount | null;
   currentRole: UserRole;
   storeItems: StoreItem[];
-  pautanganSettings: PautanganSettings;
+  dueDays: [number, number];
   pendingProofsCount: number;
   onOpenSignIn: () => void;
   onSendMessage: (threadId: string, text: string) => void;
@@ -37,7 +36,7 @@ export const ChatHubView: React.FC<ChatHubViewProps> = ({
   currentUser,
   currentRole,
   storeItems,
-  pautanganSettings,
+  dueDays,
   pendingProofsCount,
   onOpenSignIn,
   onSendMessage,
@@ -131,8 +130,7 @@ export const ChatHubView: React.FC<ChatHubViewProps> = ({
             userName: currentUser.name,
             userRole: currentRole,
             debtBalance: currentUser.debtBalance,
-            pautanganRate: pautanganSettings.monthlyInterestRate,
-            dueDays: pautanganSettings.dueDays,
+            dueDays,
             catalogSummary,
             pendingProofsCount,
           },
@@ -343,7 +341,7 @@ export const ChatHubView: React.FC<ChatHubViewProps> = ({
                   {[
                     'What is my current debt balance?',
                     'Suggest snacks under ₱100',
-                    'How much interest on a ₱2,000 Pautangan loan?',
+                    'How do I upload a GCash payment proof?',
                   ].map((q) => (
                     <button
                       key={q}
@@ -410,7 +408,7 @@ export const ChatHubView: React.FC<ChatHubViewProps> = ({
                     onChange={(e) => setDraft(e.target.value)}
                     placeholder={
                       activeThread.type === 'ai'
-                        ? 'Ask DeskPantry AI about snacks, balances, or Pautangan...'
+                        ? 'Ask DeskPantry AI about snacks, stock, or store balances...'
                         : `Message ${activeThread.title}...`
                     }
                     className="flex-1 min-h-[44px] rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-[#172523] px-4 py-2 text-sm text-stone-900 dark:text-stone-100 focus:border-teal-700 focus:outline-none"

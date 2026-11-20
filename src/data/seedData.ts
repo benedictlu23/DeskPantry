@@ -820,7 +820,7 @@ export const INITIAL_CHAT_THREADS: ChatThread[] = [
   {
     id: 'thread-ai',
     title: 'DeskPantry AI',
-    subtitle: 'Gemini Assistant · Store, Debt & Pautangan Help',
+    subtitle: 'Gemini Assistant · Store Stock & Ledger Help',
     type: 'ai',
     participantIds: ['ai'],
     unreadCount: 0,
@@ -830,7 +830,7 @@ export const INITIAL_CHAT_THREADS: ChatThread[] = [
         senderId: 'ai',
         senderName: 'DeskPantry AI',
         senderRole: 'ai',
-        text: 'Kumusta! Ask me about current pantry stock, your 15th/30th debt balance, Pautangan interest estimates, or snack recommendations.',
+        text: 'Kumusta! Ask me about current pantry stock, your 15th/30th store debt balance, payment proof uploads, or snack recommendations.',
         timestamp: '09:00 AM',
       },
     ],
