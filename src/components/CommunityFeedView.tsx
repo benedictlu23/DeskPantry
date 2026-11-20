@@ -1,0 +1,738 @@
+import React, { useState } from 'react';
+import {
+  Bell,
+  CheckCircle2,
+  Plus,
+  ShoppingCart,
+  ThumbsUp,
+  Upload,
+  X,
+} from 'lucide-react';
+import {
+  CommissionType,
+  FulfillmentType,
+  MarketplaceListing,
+  PaymentMethod,
+  SuggestionItem,
+  UserAccount,
+  UserRole,
+} from '../types';
+import { computeCommission, formatPHP } from '../utils/format';
+import { ProductImage } from './ProductImage';
+
+interface CommunityFeedViewProps {
+  suggestions: SuggestionItem[];
+  listings: MarketplaceListing[];
+  categories: string[];
+  unreadCommunityCount: number;
+  lastFeedEvent: string;
+  currentUser: UserAccount | null;
+  currentRole: UserRole;
+  onOpenSignIn: () => void;
+  onClearCommunityUnread: () => void;
+  onToggleVote: (suggestionId: string) => void;
+  onCreateSuggestion: (title: string, category: string, reason: string) => void;
+  onCreateListing: (payload: {
+    title: string;
+    description: string;
+    price: number;
+    stock: number;
+    commissionType: CommissionType;
+    commissionValue: number;
+    image?: string;
+  }) => void;
+  onBuyListing: (
+    listingId: string,
+    paymentMethod: PaymentMethod.Cash | PaymentMethod.Debt,
+    fulfillment: FulfillmentType
+  ) => void;
+}
+
+export const CommunityFeedView: React.FC<CommunityFeedViewProps> = ({
+  suggestions,
+  listings,
+  categories,
+  unreadCommunityCount,
+  lastFeedEvent,
+  currentUser,
+  currentRole,
+  onOpenSignIn,
+  onClearCommunityUnread,
+  onToggleVote,
+  onCreateSuggestion,
+  onCreateListing,
+  onBuyListing,
+}) => {
+  const [activeTab, setActiveTab] = useState<'marketplace' | 'suggestions'>('marketplace');
+  const [showSuggestForm, setShowSuggestForm] = useState(false);
+  const [showSellForm, setShowSellForm] = useState(false);
+  const [buyModalListing, setBuyModalListing] = useState<MarketplaceListing | null>(null);
+  const [buyPayment, setBuyPayment] = useState<PaymentMethod.Cash | PaymentMethod.Debt>(
+    PaymentMethod.Cash
+  );
+  const [buyFulfillment, setBuyFulfillment] = useState<FulfillmentType>(FulfillmentType.Pickup);
+  const [feedbackBanner, setFeedbackBanner] = useState('');
+
+  // Suggestion form state
+  const [sugTitle, setSugTitle] = useState('');
+  const [sugCategory, setSugCategory] = useState(categories[0] ?? 'Coffee & Drinks');
+  const [sugReason, setSugReason] = useState('');
+
+  // Listing form state
+  const [sellTitle, setSellTitle] = useState('');
+  const [sellDesc, setSellDesc] = useState('');
+  const [sellPrice, setSellPrice] = useState('150');
+  const [sellStock, setSellStock] = useState('5');
+  const [sellCommType, setSellCommType] = useState<CommissionType>(CommissionType.Percentage);
+  const [sellCommValue, setSellCommValue] = useState('10');
+  const [sellImage, setSellImage] = useState('');
+
+  const isGuest = currentRole === UserRole.Guest || !currentUser;
+  const approvedListings = listings.filter((l) => l.approvalStatus === 'approved');
+  const myPendingListings = currentUser
+    ? listings.filter((l) => l.sellerId === currentUser.id && l.approvalStatus === 'pending')
+    : [];
+
+  const previewCommission = computeCommission(
+    Number(sellPrice) || 0,
+    sellCommType,
+    Number(sellCommValue) || 0
+  );
+
+  const handleSuggestSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isGuest) {
+      onOpenSignIn();
+      return;
+    }
+    if (!sugTitle.trim()) return;
+    onCreateSuggestion(
+      sugTitle.trim(),
+      sugCategory || categories[0] || 'Coffee & Drinks',
+      sugReason.trim() || 'Requested by coworker.'
+    );
+    setSugTitle('');
+    setSugReason('');
+    setShowSuggestForm(false);
+    setFeedbackBanner('Suggestion posted to the public vote board.');
+    setTimeout(() => setFeedbackBanner(''), 4000);
+  };
+
+  const handleSellSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isGuest) {
+      onOpenSignIn();
+      return;
+    }
+    const parsedPrice = Number(sellPrice);
+    const parsedStock = Number(sellStock);
+    const parsedComm = Number(sellCommValue);
+    if (!sellTitle.trim() || parsedPrice <= 0 || parsedStock <= 0) return;
+
+    onCreateListing({
+      title: sellTitle.trim(),
+      description: sellDesc.trim() || 'Homemade coworker item available at the office.',
+      price: parsedPrice,
+      stock: parsedStock,
+      commissionType: sellCommType,
+      commissionValue: Math.max(0, parsedComm),
+      image: sellImage || undefined,
+    });
+
+    setSellTitle('');
+    setSellDesc('');
+    setSellImage('');
+    setShowSellForm(false);
+    setFeedbackBanner(
+      'Listing submitted! It will appear on the Public For-Sale Feed once approved by an Admin.'
+    );
+    setTimeout(() => setFeedbackBanner(''), 5500);
+  };
+
+  const handleConfirmPurchase = () => {
+    if (!buyModalListing) return;
+    if (isGuest) {
+      setBuyModalListing(null);
+      onOpenSignIn();
+      return;
+    }
+    onBuyListing(buyModalListing.id, buyPayment, buyFulfillment);
+    setFeedbackBanner(
+      `Purchased "${buyModalListing.title}" via ${
+        buyPayment === PaymentMethod.Debt ? 'Store Debt' : 'Cash'
+      }.`
+    );
+    setBuyModalListing(null);
+    setTimeout(() => setFeedbackBanner(''), 4500);
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+        <div>
+          <h1 className="text-2xl sm:text-3xl font-bold text-stone-900 dark:text-stone-100">
+            Community Hub &amp; Marketplace
+          </h1>
+          <p className="mt-1 text-sm text-stone-600 dark:text-stone-400">
+            Buy coworker-made food &amp; items (like <em>manok</em> and <em>suman</em>), post your own with store commission, or upvote pantry requests.
+          </p>
+        </div>
+
+        <div className="flex items-center gap-1 p-1 rounded-xl bg-stone-100 dark:bg-[#121D1B] border border-stone-200 dark:border-stone-800 self-start">
+          <button
+            type="button"
+            onClick={() => setActiveTab('marketplace')}
+            className={`min-h-[38px] px-4 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+              activeTab === 'marketplace'
+                ? 'bg-white dark:bg-teal-700 text-stone-900 dark:text-white shadow-xs'
+                : 'text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white'
+            }`}
+          >
+            Public For-Sale Feed ({approvedListings.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('suggestions')}
+            className={`min-h-[38px] px-4 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+              activeTab === 'suggestions'
+                ? 'bg-white dark:bg-teal-700 text-stone-900 dark:text-white shadow-xs'
+                : 'text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white'
+            }`}
+          >
+            Suggestions Feed ({suggestions.length})
+          </button>
+        </div>
+      </div>
+
+      {/* Real-Time Community Feed Notification Indicator */}
+      <div className="rounded-xl border border-teal-200 dark:border-teal-800/70 bg-teal-50/60 dark:bg-teal-950/35 px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs">
+        <div className="flex items-center gap-2 text-teal-900 dark:text-teal-200">
+          <Bell className="w-3.5 h-3.5 text-teal-700 dark:text-teal-400 shrink-0" />
+          <span className="font-semibold">
+            {unreadCommunityCount > 0
+              ? `Live Community Updates (${unreadCommunityCount} new):`
+              : 'Community Feed Live:'}
+          </span>
+          <span className="text-teal-800 dark:text-teal-300">{lastFeedEvent}</span>
+        </div>
+        {unreadCommunityCount > 0 && (
+          <button
+            type="button"
+            onClick={onClearCommunityUnread}
+            className="text-xs font-semibold text-teal-700 dark:text-teal-300 hover:underline cursor-pointer"
+          >
+            Mark feed caught up
+          </button>
+        )}
+      </div>
+
+      {feedbackBanner && (
+        <div className="flex items-center gap-2.5 rounded-xl border border-emerald-200 dark:border-emerald-800/70 bg-emerald-50 dark:bg-emerald-950/50 px-4 py-3 text-sm text-emerald-900 dark:text-emerald-200">
+          <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+          <span>{feedbackBanner}</span>
+        </div>
+      )}
+
+      {activeTab === 'marketplace' ? (
+        <div className="space-y-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] p-5">
+            <div>
+              <h2 className="text-base font-bold text-stone-900 dark:text-stone-100">
+                Coworker For-Sale Board
+              </h2>
+              <p className="text-xs text-stone-500 dark:text-stone-400 mt-0.5">
+                Every seller sets a percentage or fixed commission per sale for the store owner. Posts appear after Admin approval.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => (isGuest ? onOpenSignIn() : setShowSellForm((prev) => !prev))}
+              className="min-h-[42px] inline-flex items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 py-2 text-xs font-semibold text-white hover:bg-teal-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              <Plus className="w-4 h-4" />
+              <span>{showSellForm ? 'Close Form' : 'Post Item for Sale'}</span>
+            </button>
+          </div>
+
+          {showSellForm && (
+            <form
+              onSubmit={handleSellSubmit}
+              className="rounded-2xl border border-teal-200 dark:border-teal-800 bg-white dark:bg-[#121D1B] p-6 space-y-4"
+            >
+              <h3 className="text-base font-bold text-stone-900 dark:text-stone-100">
+                Submit Coworker Listing (Requires Admin Approval)
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-medium text-stone-700 dark:text-stone-300 mb-1">
+                    Item Title
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={sellTitle}
+                    onChange={(e) => setSellTitle(e.target.value)}
+                    placeholder="e.g. Homemade Suman sa Lihiya or Roasted Manok"
+                    className="w-full min-h-[42px] rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-[#172523] px-3 py-2 text-sm text-stone-900 dark:text-stone-100 focus:border-teal-700 focus:outline-none"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-stone-700 dark:text-stone-300 mb-1">
+                      Selling Price (₱)
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      required
+                      value={sellPrice}
+                      onChange={(e) => setSellPrice(e.target.value)}
+                      className="w-full min-h-[42px] rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-[#172523] px-3 py-2 text-sm font-mono tabular-nums text-stone-900 dark:text-stone-100 focus:border-teal-700 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-stone-700 dark:text-stone-300 mb-1">
+                      Available Qty
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      required
+                      value={sellStock}
+                      onChange={(e) => setSellStock(e.target.value)}
+                      className="w-full min-h-[42px] rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-[#172523] px-3 py-2 text-sm font-mono tabular-nums text-stone-900 dark:text-stone-100 focus:border-teal-700 focus:outline-none"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-stone-700 dark:text-stone-300 mb-1">
+                  Description &amp; Pickup Schedule
+                </label>
+                <input
+                  type="text"
+                  value={sellDesc}
+                  onChange={(e) => setSellDesc(e.target.value)}
+                  placeholder="Fresh batch arriving 12:30 PM at 4F pantry."
+                  className="w-full min-h-[42px] rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-[#172523] px-3 py-2 text-sm text-stone-900 dark:text-stone-100 focus:border-teal-700 focus:outline-none"
+                />
+              </div>
+
+              <div className="flex flex-wrap items-center gap-3">
+                <label className="min-h-[38px] inline-flex items-center gap-1.5 rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-[#172523] px-3 py-1.5 text-xs font-semibold text-stone-700 dark:text-stone-200 cursor-pointer">
+                  <Upload className="w-3.5 h-3.5 text-teal-700 dark:text-teal-400" />
+                  <span>{sellImage ? 'Change Item Image' : 'Upload Item Photo'}</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (!f) return;
+                      const r = new FileReader();
+                      r.onload = () => {
+                        if (typeof r.result === 'string') setSellImage(r.result);
+                      };
+                      r.readAsDataURL(f);
+                    }}
+                    className="hidden"
+                  />
+                </label>
+                {sellImage && (
+                  <img
+                    src={sellImage}
+                    alt="Listing preview"
+                    className="w-12 h-12 rounded-lg object-cover border border-stone-200 dark:border-stone-700"
+                  />
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2 border-t border-stone-100 dark:border-stone-800">
+                <div>
+                  <label className="block text-xs font-medium text-stone-700 dark:text-stone-300 mb-1">
+                    Owner Commission Type
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setSellCommType(CommissionType.Percentage)}
+                      className={`min-h-[40px] rounded-lg border text-xs font-semibold cursor-pointer ${
+                        sellCommType === CommissionType.Percentage
+                          ? 'border-teal-700 bg-teal-50 dark:bg-teal-950/60 text-teal-800 dark:text-teal-200'
+                          : 'border-stone-200 dark:border-stone-700 text-stone-600 dark:text-stone-300'
+                      }`}
+                    >
+                      Percentage (%)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSellCommType(CommissionType.Fixed)}
+                      className={`min-h-[40px] rounded-lg border text-xs font-semibold cursor-pointer ${
+                        sellCommType === CommissionType.Fixed
+                          ? 'border-teal-700 bg-teal-50 dark:bg-teal-950/60 text-teal-800 dark:text-teal-200'
+                          : 'border-stone-200 dark:border-stone-700 text-stone-600 dark:text-stone-300'
+                      }`}
+                    >
+                      Fixed Rate (₱)
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-stone-700 dark:text-stone-300 mb-1">
+                    Commission Rate ({sellCommType === CommissionType.Percentage ? '%' : '₱'})
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    max={sellCommType === CommissionType.Percentage ? 100 : undefined}
+                    value={sellCommValue}
+                    onChange={(e) => setSellCommValue(e.target.value)}
+                    className="w-full min-h-[40px] rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-[#172523] px-3 py-2 text-sm font-mono tabular-nums text-stone-900 dark:text-stone-100 focus:border-teal-700 focus:outline-none"
+                  />
+                </div>
+
+                <div className="rounded-xl bg-stone-50 dark:bg-[#172523] border border-stone-200 dark:border-stone-800 p-3 flex flex-col justify-center">
+                  <div className="text-xs text-stone-500 dark:text-stone-400">
+                    Per-Sale Breakdown
+                  </div>
+                  <div className="mt-1 text-xs font-semibold text-stone-900 dark:text-stone-100 tabular-nums">
+                    Store Owner: {formatPHP(previewCommission.ownerShare)} · You Keep:{' '}
+                    {formatPHP(previewCommission.sellerNet)}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowSellForm(false)}
+                  className="min-h-[42px] px-4 py-2 rounded-xl border border-stone-200 dark:border-stone-700 text-xs font-semibold text-stone-600 dark:text-stone-300 hover:bg-stone-50 dark:hover:bg-[#172523] cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="min-h-[42px] px-5 py-2 rounded-xl bg-teal-700 text-xs font-semibold text-white hover:bg-teal-800 cursor-pointer"
+                >
+                  Submit for Admin Approval
+                </button>
+              </div>
+            </form>
+          )}
+
+          {myPendingListings.length > 0 && (
+            <div className="rounded-xl border border-amber-200 dark:border-amber-800/70 bg-amber-50/70 dark:bg-amber-950/35 p-4 space-y-2">
+              <div className="text-xs font-bold text-amber-900 dark:text-amber-200">
+                Your Listings Pending Admin Approval ({myPendingListings.length})
+              </div>
+              {myPendingListings.map((p) => (
+                <div
+                  key={p.id}
+                  className="text-xs text-amber-800 dark:text-amber-300 flex items-center justify-between"
+                >
+                  <span>
+                    {p.title} · {formatPHP(p.price)} ({p.stock} qty)
+                  </span>
+                  <span className="font-semibold">Awaiting Approval</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {approvedListings.map((listing) => {
+              const { ownerShare } = computeCommission(
+                listing.price,
+                listing.commissionType,
+                listing.commissionValue
+              );
+              return (
+                <article
+                  key={listing.id}
+                  className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] overflow-hidden flex flex-col justify-between"
+                >
+                  <div>
+                    <div className="aspect-[4/3] bg-stone-100 dark:bg-stone-900 border-b border-stone-200 dark:border-stone-800">
+                      <ProductImage
+                        src={listing.image}
+                        alt={listing.title}
+                        title={listing.title}
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
+                    <div className="p-5">
+                      <div className="text-xs text-stone-500 dark:text-stone-400">
+                        {listing.sellerName} · {listing.sellerDepartment}
+                      </div>
+                      <h3 className="mt-1 text-base font-bold text-stone-900 dark:text-stone-100">
+                        {listing.title}
+                      </h3>
+                      <p className="mt-1 text-sm text-stone-600 dark:text-stone-400 line-clamp-2">
+                        {listing.description}
+                      </p>
+                      <div className="mt-3 text-xs text-stone-500 dark:text-stone-400 tabular-nums">
+                        {listing.stock > 0 ? `${listing.stock} left` : 'Sold out'} ·{' '}
+                        {listing.soldCount} sold · Store share:{' '}
+                        {listing.commissionType === CommissionType.Percentage
+                          ? `${listing.commissionValue}% (${formatPHP(ownerShare)})`
+                          : `${formatPHP(listing.commissionValue)} fixed`}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="px-5 pb-5 pt-2 flex items-center justify-between gap-3">
+                    <span className="text-lg font-bold text-stone-900 dark:text-stone-100 font-mono tabular-nums">
+                      {formatPHP(listing.price)}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={listing.stock <= 0}
+                      onClick={() =>
+                        isGuest ? onOpenSignIn() : setBuyModalListing(listing)
+                      }
+                      className="min-h-[42px] inline-flex items-center gap-1.5 rounded-xl bg-teal-700 px-4 py-2 text-xs font-semibold text-white hover:bg-teal-800 disabled:bg-stone-200 dark:disabled:bg-stone-800 disabled:text-stone-500 transition-colors cursor-pointer"
+                    >
+                      <ShoppingCart className="w-3.5 h-3.5" />
+                      <span>
+                        {listing.stock <= 0
+                          ? 'Sold Out'
+                          : isGuest
+                            ? 'Sign in to Buy'
+                            : 'Buy (Cash / Debt)'}
+                      </span>
+                    </button>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] p-5">
+            <div>
+              <h2 className="text-base font-bold text-stone-900 dark:text-stone-100">
+                Store Item Suggestions &amp; Public Voting
+              </h2>
+              <p className="text-xs text-stone-500 dark:text-stone-400 mt-0.5">
+                Request snacks, coffee, or desk supplies and upvote coworker suggestions.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => (isGuest ? onOpenSignIn() : setShowSuggestForm((prev) => !prev))}
+              className="min-h-[42px] inline-flex items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 py-2 text-xs font-semibold text-white hover:bg-teal-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              <Plus className="w-4 h-4" />
+              <span>{showSuggestForm ? 'Close' : 'Request New Item'}</span>
+            </button>
+          </div>
+
+          {showSuggestForm && (
+            <form
+              onSubmit={handleSuggestSubmit}
+              className="rounded-2xl border border-teal-200 dark:border-teal-800 bg-white dark:bg-[#121D1B] p-6 space-y-4"
+            >
+              <h3 className="text-base font-bold text-stone-900 dark:text-stone-100">
+                Suggest a Pantry Item
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-medium text-stone-700 dark:text-stone-300 mb-1">
+                    Item Name
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={sugTitle}
+                    onChange={(e) => setSugTitle(e.target.value)}
+                    placeholder="e.g. Chilled Almond Milk or Cup Noodles"
+                    className="w-full min-h-[42px] rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-[#172523] px-3 py-2 text-sm text-stone-900 dark:text-stone-100 focus:border-teal-700 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-stone-700 dark:text-stone-300 mb-1">
+                    Category
+                  </label>
+                  <select
+                    value={sugCategory}
+                    onChange={(e) => setSugCategory(e.target.value)}
+                    className="w-full min-h-[42px] rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-[#172523] px-3 py-2 text-sm text-stone-900 dark:text-stone-100 focus:border-teal-700 focus:outline-none"
+                  >
+                    {categories.map((cat) => (
+                      <option key={cat} value={cat}>
+                        {cat}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-stone-700 dark:text-stone-300 mb-1">
+                  Why should we stock this?
+                </label>
+                <input
+                  type="text"
+                  value={sugReason}
+                  onChange={(e) => setSugReason(e.target.value)}
+                  placeholder="Short note for teammates and pantry admin"
+                  className="w-full min-h-[42px] rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-[#172523] px-3 py-2 text-sm text-stone-900 dark:text-stone-100 focus:border-teal-700 focus:outline-none"
+                />
+              </div>
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowSuggestForm(false)}
+                  className="min-h-[40px] px-4 py-2 rounded-xl border border-stone-200 dark:border-stone-700 text-xs font-semibold text-stone-600 dark:text-stone-300 cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="min-h-[40px] px-5 py-2 rounded-xl bg-teal-700 text-xs font-semibold text-white hover:bg-teal-800 cursor-pointer"
+                >
+                  Post Suggestion
+                </button>
+              </div>
+            </form>
+          )}
+
+          <div className="divide-y divide-stone-200 dark:divide-stone-800 rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] overflow-hidden">
+            {[...suggestions]
+              .sort((a, b) => b.voterIds.length - a.voterIds.length)
+              .map((sug) => {
+                const hasVoted = currentUser ? sug.voterIds.includes(currentUser.id) : false;
+                return (
+                  <div
+                    key={sug.id}
+                    className="p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+                  >
+                    <div className="space-y-1 min-w-0">
+                      <div className="text-xs text-stone-500 dark:text-stone-400">
+                        {sug.category} · Requested by {sug.requestedByName} · {sug.createdAt} ·{' '}
+                        <span className="font-semibold text-stone-700 dark:text-stone-200">
+                          {sug.status}
+                        </span>
+                      </div>
+                      <h3 className="text-base font-bold text-stone-900 dark:text-stone-100">
+                        {sug.title}
+                      </h3>
+                      <p className="text-sm text-stone-600 dark:text-stone-400">{sug.reason}</p>
+                      <p className="text-xs text-stone-500 dark:text-stone-400 pt-1">
+                        Voters:{' '}
+                        {sug.voterNames.length > 0
+                          ? sug.voterNames.join(', ')
+                          : 'Be the first to vote'}
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => (isGuest ? onOpenSignIn() : onToggleVote(sug.id))}
+                      className={`min-h-[44px] px-4 py-2 rounded-xl border inline-flex items-center gap-2 text-xs font-semibold whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+                        hasVoted
+                          ? 'border-teal-700 bg-teal-50 dark:bg-teal-950/60 text-teal-800 dark:text-teal-200'
+                          : 'border-stone-200 dark:border-stone-700 bg-white dark:bg-[#172523] text-stone-700 dark:text-stone-200 hover:bg-stone-50 dark:hover:bg-[#1F312E]'
+                      }`}
+                    >
+                      <ThumbsUp className="w-4 h-4" />
+                      <span className="tabular-nums">
+                        {hasVoted ? 'Voted' : 'Upvote'} ({sug.voterIds.length})
+                      </span>
+                    </button>
+                  </div>
+                );
+              })}
+          </div>
+        </div>
+      )}
+
+      {/* Marketplace Buy Modal */}
+      {buyModalListing && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/60 p-4 backdrop-blur-xs">
+          <div className="w-full max-w-md rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] p-6 shadow-xl space-y-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-lg font-bold text-stone-900 dark:text-stone-100">
+                  {buyModalListing.title}
+                </h3>
+                <p className="text-xs text-stone-500 dark:text-stone-400">
+                  Sold by {buyModalListing.sellerName} · {formatPHP(buyModalListing.price)}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setBuyModalListing(null)}
+                className="min-h-[40px] min-w-[40px] flex items-center justify-center rounded-lg text-stone-500 hover:bg-stone-100 dark:hover:bg-stone-800 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-stone-700 dark:text-stone-300 mb-2">
+                Pickup or Desk Delivery
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                {[FulfillmentType.Pickup, FulfillmentType.Delivery].map((f) => (
+                  <button
+                    key={f}
+                    type="button"
+                    onClick={() => setBuyFulfillment(f)}
+                    className={`min-h-[40px] rounded-xl border text-xs font-semibold cursor-pointer ${
+                      buyFulfillment === f
+                        ? 'border-teal-700 bg-teal-50 dark:bg-teal-950/60 text-teal-800 dark:text-teal-200'
+                        : 'border-stone-200 dark:border-stone-700 text-stone-600 dark:text-stone-300'
+                    }`}
+                  >
+                    {f}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-stone-700 dark:text-stone-300 mb-2">
+                Payment Method (Cash or Store Debt)
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                {([PaymentMethod.Cash, PaymentMethod.Debt] as const).map((pm) => (
+                  <button
+                    key={pm}
+                    type="button"
+                    onClick={() => setBuyPayment(pm)}
+                    className={`min-h-[40px] rounded-xl border text-xs font-semibold cursor-pointer ${
+                      buyPayment === pm
+                        ? 'border-teal-700 bg-teal-50 dark:bg-teal-950/60 text-teal-800 dark:text-teal-200'
+                        : 'border-stone-200 dark:border-stone-700 text-stone-600 dark:text-stone-300'
+                    }`}
+                  >
+                    {pm === PaymentMethod.Debt ? 'Store Credit (Debt)' : 'Cash'}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setBuyModalListing(null)}
+                className="min-h-[42px] px-4 py-2 rounded-xl border border-stone-200 dark:border-stone-700 text-xs font-semibold text-stone-600 dark:text-stone-300 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmPurchase}
+                className="min-h-[42px] px-5 py-2 rounded-xl bg-teal-700 text-xs font-semibold text-white hover:bg-teal-800 cursor-pointer"
+              >
+                Confirm Purchase · {formatPHP(buyModalListing.price)}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};

@@ -1,0 +1,46 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-display: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+  --font-sans: "DM Sans", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+@layer base {
+  body {
+    font-family: var(--font-sans);
+    background-color: #f7f7f5;
+    color: #1c1917;
+  }
+
+  html.dark body {
+    background-color: #0b1211;
+    color: #f5f5f4;
+  }
+
+  h1, h2, h3, h4, .font-display {
+    font-family: var(--font-display);
+  }
+
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+.daylight-hero-surface {
+  background: radial-gradient(circle at 12% 18%, rgba(15, 118, 110, 0.08) 0%, rgba(247, 247, 245, 0.92) 52%, #ffffff 100%);
+}
+
+html.dark .daylight-hero-surface {
+  background: radial-gradient(circle at 12% 18%, rgba(20, 184, 166, 0.16) 0%, rgba(18, 29, 27, 0.96) 55%, #0f1917 100%);
+}
+
+.web-nav-gradient {
+  background: linear-gradient(90deg, #0f2e2a 0%, #133b35 60%, #113530 100%);
+}
+
+html.dark .web-nav-gradient {
+  background: linear-gradient(90deg, #081c19 0%, #0d2925 60%, #09201c 100%);
+}

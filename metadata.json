@@ -1,0 +1,6 @@
+{
+  "name": "DeskPantry",
+  "description": "Department office store, coworker marketplace, Pautangan cash assistance, and community hub.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
