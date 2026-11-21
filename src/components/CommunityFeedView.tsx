@@ -18,6 +18,7 @@ import {
   UserRole,
 } from '../types';
 import { computeCommission, formatPHP } from '../utils/format';
+import { compressImageFileToDataUrl } from '../utils/image';
 import { ProductImage } from './ProductImage';
 
 interface CommunityFeedViewProps {
@@ -329,11 +330,9 @@ export const CommunityFeedView: React.FC<CommunityFeedViewProps> = ({
                     onChange={(e) => {
                       const f = e.target.files?.[0];
                       if (!f) return;
-                      const r = new FileReader();
-                      r.onload = () => {
-                        if (typeof r.result === 'string') setSellImage(r.result);
-                      };
-                      r.readAsDataURL(f);
+                      void compressImageFileToDataUrl(f).then((compressed) => {
+                        setSellImage(compressed);
+                      });
                     }}
                     className="hidden"
                   />

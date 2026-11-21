@@ -27,7 +27,7 @@ interface DeliveryStaffViewProps {
     cashCollected?: boolean
   ) => void;
   onNotifyCustomer: (order: StoreOrder) => void;
-  onSwitchDemoRole: (role: UserRole) => void;
+  onExitPreview?: () => void;
 }
 
 export const DeliveryStaffView: React.FC<DeliveryStaffViewProps> = ({
@@ -36,7 +36,7 @@ export const DeliveryStaffView: React.FC<DeliveryStaffViewProps> = ({
   currentRole,
   onUpdateDeliveryStatus,
   onNotifyCustomer,
-  onSwitchDemoRole,
+  onExitPreview,
 }) => {
   const [filter, setFilter] = useState<
     'active' | 'Pending Dispatch' | 'Out for Delivery' | 'Delivered' | 'delivery_only'
@@ -107,15 +107,17 @@ export const DeliveryStaffView: React.FC<DeliveryStaffViewProps> = ({
           Delivery Staff Access Required
         </h2>
         <p className="text-sm text-stone-600 dark:text-stone-400 max-w-md mx-auto">
-          Switch to the Delivery Staff, Admin, or Super Admin role to manage desk delivery runs, counter pickups, and cash-on-delivery collections.
+          Only Delivery Staff, Admin, or Super Admin accounts can manage desk delivery runs, counter pickups, and cash-on-delivery collections.
         </p>
-        <button
-          type="button"
-          onClick={() => onSwitchDemoRole(UserRole.DeliveryStaff)}
-          className="min-h-[44px] rounded-xl bg-teal-700 px-5 py-2.5 text-sm font-semibold text-white hover:bg-teal-800 cursor-pointer"
-        >
-          Switch to Delivery Staff View
-        </button>
+        {onExitPreview && (
+          <button
+            type="button"
+            onClick={onExitPreview}
+            className="min-h-[44px] rounded-xl bg-teal-700 px-5 py-2.5 text-sm font-semibold text-white hover:bg-teal-800 cursor-pointer"
+          >
+            Exit Role Preview
+          </button>
+        )}
       </div>
     );
   }

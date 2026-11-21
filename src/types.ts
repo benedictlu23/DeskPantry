@@ -69,6 +69,28 @@ export interface StoreItem {
   stock: number;
   soldCount: number;
   image?: string;
+  barcode?: string;
+}
+
+export type StockAdjustmentType = 'add' | 'deduct' | 'recount' | 'restock';
+
+export interface StockAdjustmentLog {
+  id: string;
+  itemId: string;
+  itemName: string;
+  itemCategory: string;
+  barcode?: string;
+  adjustmentType: StockAdjustmentType;
+  reason: string;
+  note?: string;
+  previousStock: number;
+  delta: number;
+  newStock: number;
+  unitCostAtTime: number;
+  adjustedById: string;
+  adjustedByName: string;
+  createdAt: string;
+  createdAtMs: number;
 }
 
 export interface CartItem {

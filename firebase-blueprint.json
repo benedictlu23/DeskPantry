@@ -1,0 +1,386 @@
+{
+  "entities": {
+    "UserAccount": {
+      "title": "UserAccount",
+      "description": "Private coworker account record containing verified email, RBAC role, store debt balance, saved Gmail avatar URL, and admin-controlled Pautangan access.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "email": { "type": "string", "format": "email", "maxLength": 200 },
+        "department": { "type": "string", "maxLength": 120 },
+        "role": { "type": "string", "enum": ["guest", "member", "delivery_staff", "admin", "super_admin"] },
+        "debtBalance": { "type": "number" },
+        "pautanganEnabled": { "type": "boolean" },
+        "pautanganLimit": { "type": "number" },
+        "avatarInitials": { "type": "string", "maxLength": 6 },
+        "avatarUrl": { "type": "string", "maxLength": 1000 },
+        "totalSpent": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "email", "department", "role", "debtBalance", "pautanganEnabled", "pautanganLimit", "avatarInitials", "totalSpent"]
+    },
+    "CoworkerProfile": {
+      "title": "CoworkerProfile",
+      "description": "Non-PII coworker display profile (name, department, avatar) readable by signed-in coworkers for chat and marketplace display.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "department": { "type": "string", "maxLength": 120 },
+        "avatarInitials": { "type": "string", "maxLength": 6 },
+        "avatarUrl": { "type": "string", "maxLength": 1000 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "department", "avatarInitials"]
+    },
+    "StoreItem": {
+      "title": "StoreItem",
+      "description": "Pantry SKU with selling price, cost price, cost history, and live stock.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 140 },
+        "category": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "description": { "type": "string", "maxLength": 600 },
+        "price": { "type": "number" },
+        "costPrice": { "type": "number" },
+        "costHistory": { "type": "array" },
+        "stock": { "type": "number" },
+        "soldCount": { "type": "number" },
+        "image": { "type": "string", "maxLength": 400000 },
+        "barcode": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "category", "description", "price", "costPrice", "costHistory", "stock", "soldCount"]
+    },
+    "StockAdjustmentLog": {
+      "title": "StockAdjustmentLog",
+      "description": "Immutable inventory stock adjustment and restock audit trail record.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "itemId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "itemName": { "type": "string", "minLength": 1, "maxLength": 140 },
+        "itemCategory": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "barcode": { "type": "string", "maxLength": 64 },
+        "adjustmentType": { "type": "string", "enum": ["add", "deduct", "recount", "restock"] },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "note": { "type": "string", "maxLength": 400 },
+        "previousStock": { "type": "number" },
+        "delta": { "type": "number" },
+        "newStock": { "type": "number" },
+        "unitCostAtTime": { "type": "number" },
+        "adjustedById": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "adjustedByName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "createdAt": { "type": "string", "maxLength": 80 },
+        "createdAtMs": { "type": "number" }
+      },
+      "required": ["id", "itemId", "itemName", "itemCategory", "adjustmentType", "reason", "previousStock", "delta", "newStock", "unitCostAtTime", "adjustedById", "adjustedByName", "createdAt", "createdAtMs"]
+    },
+    "StoreConfig": {
+      "title": "StoreConfig",
+      "description": "Public storefront configuration including categories, delivery settings, payment methods, and monthly debt due days.",
+      "type": "object",
+      "properties": {
+        "storeAnnouncement": { "type": "string", "maxLength": 500 },
+        "deliveryEnabled": { "type": "boolean" },
+        "deliveryFee": { "type": "number" },
+        "walletAccountName": { "type": "string", "maxLength": 120 },
+        "walletAccountNumber": { "type": "string", "maxLength": 60 },
+        "categories": { "type": "array" },
+        "paymentMethods": { "type": "array" },
+        "dueDays": { "type": "array" },
+        "ownerCommissionEarned": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["storeAnnouncement", "deliveryEnabled", "deliveryFee", "walletAccountName", "walletAccountNumber", "categories", "paymentMethods", "dueDays"]
+    },
+    "PautanganSettings": {
+      "title": "PautanganSettings",
+      "description": "Confidential Pautangan cash assistance global configuration readable only by Admin or explicitly enabled coworkers.",
+      "type": "object",
+      "properties": {
+        "globalEnabled": { "type": "boolean" },
+        "monthlyInterestRate": { "type": "number" },
+        "dueDays": { "type": "array" },
+        "availableTerms": { "type": "array" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["globalEnabled", "monthlyInterestRate", "dueDays", "availableTerms"]
+    },
+    "StoreOrder": {
+      "title": "StoreOrder",
+      "description": "Coworker store or marketplace order with fulfillment, payment, and delivery tracking.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "items": { "type": "array" },
+        "totalAmount": { "type": "number" },
+        "deliveryFee": { "type": "number" },
+        "deliveryCommission": { "type": "number" },
+        "fulfillment": { "type": "string", "enum": ["Pickup", "Delivery"] },
+        "deliveryNote": { "type": "string", "maxLength": 300 },
+        "paymentMethod": { "type": "string", "maxLength": 80 },
+        "status": { "type": "string", "enum": ["Confirmed", "Pending Payment Proof", "Completed"] },
+        "deliveryStatus": { "type": "string", "enum": ["Pending Dispatch", "Out for Delivery", "Delivered"] },
+        "assignedRunnerId": { "type": "string", "maxLength": 128 },
+        "assignedRunner": { "type": "string", "maxLength": 120 },
+        "cashCollected": { "type": "boolean" },
+        "createdAt": { "type": "string", "maxLength": 80 },
+        "orderDateIso": { "type": "string", "maxLength": 40 },
+        "deliveredAt": { "type": "string", "maxLength": 80 },
+        "dueDateLabel": { "type": "string", "maxLength": 80 },
+        "source": { "type": "string", "enum": ["store", "marketplace"] },
+        "commissionEarned": { "type": "number" },
+        "logs": { "type": "array" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "userName", "items", "totalAmount", "fulfillment", "paymentMethod", "status", "createdAt", "orderDateIso", "source", "logs"]
+    },
+    "PaymentProof": {
+      "title": "PaymentProof",
+      "description": "Uploaded digital payment receipt awaiting Admin confirmation.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "amount": { "type": "number" },
+        "channel": { "type": "string", "maxLength": 60 },
+        "referenceNo": { "type": "string", "maxLength": 100 },
+        "purpose": { "type": "string", "enum": ["Store Debt Settlement", "Order Payment", "Pautangan Repayment"] },
+        "imageDataUrl": { "type": "string", "maxLength": 400000 },
+        "submittedAt": { "type": "string", "maxLength": 80 },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "reviewedBy": { "type": "string", "maxLength": 120 },
+        "reviewedAt": { "type": "string", "maxLength": 80 },
+        "orderId": { "type": "string", "maxLength": 128 },
+        "loanId": { "type": "string", "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "userName", "amount", "channel", "referenceNo", "purpose", "imageDataUrl", "submittedAt", "status"]
+    },
+    "LoanRecord": {
+      "title": "LoanRecord",
+      "description": "Confidential Pautangan cash assistance record accessible only by owner and Admin/SuperAdmin.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "principal": { "type": "number" },
+        "interestRate": { "type": "number" },
+        "months": { "type": "number" },
+        "totalPayable": { "type": "number" },
+        "remainingBalance": { "type": "number" },
+        "status": { "type": "string", "enum": ["Active", "Settled", "Pending Approval"] },
+        "createdAt": { "type": "string", "maxLength": 40 },
+        "nextDueDate": { "type": "string", "maxLength": 40 },
+        "repayments": { "type": "array" },
+        "installments": { "type": "array" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "userName", "principal", "interestRate", "months", "totalPayable", "remainingBalance", "status", "createdAt", "nextDueDate", "repayments", "installments"]
+    },
+    "SuggestionItem": {
+      "title": "SuggestionItem",
+      "description": "Coworker snack/product suggestion with upvote tracking.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 140 },
+        "category": { "type": "string", "maxLength": 80 },
+        "reason": { "type": "string", "maxLength": 400 },
+        "requestedById": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "requestedByName": { "type": "string", "maxLength": 120 },
+        "createdAt": { "type": "string", "maxLength": 60 },
+        "voterIds": { "type": "array" },
+        "voterNames": { "type": "array" },
+        "status": { "type": "string", "enum": ["Open for Votes", "Reviewing", "Added to Pantry"] },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "title", "category", "reason", "requestedById", "requestedByName", "createdAt", "voterIds", "voterNames", "status"]
+    },
+    "MarketplaceListing": {
+      "title": "MarketplaceListing",
+      "description": "Coworker for-sale listing with admin approval and commission settings.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "sellerId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "sellerName": { "type": "string", "maxLength": 120 },
+        "sellerDepartment": { "type": "string", "maxLength": 120 },
+        "title": { "type": "string", "minLength": 1, "maxLength": 140 },
+        "description": { "type": "string", "maxLength": 600 },
+        "price": { "type": "number" },
+        "stock": { "type": "number" },
+        "soldCount": { "type": "number" },
+        "commissionType": { "type": "string", "enum": ["percentage", "fixed"] },
+        "commissionValue": { "type": "number" },
+        "approvalStatus": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "createdAt": { "type": "string", "maxLength": 60 },
+        "image": { "type": "string", "maxLength": 400000 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "sellerId", "sellerName", "sellerDepartment", "title", "description", "price", "stock", "soldCount", "commissionType", "commissionValue", "approvalStatus", "createdAt"]
+    },
+    "EWalletPost": {
+      "title": "EWalletPost",
+      "description": "Peer-to-peer e-wallet cash exchange post among signed-in coworkers.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "type": { "type": "string", "enum": ["sell", "buy"] },
+        "walletProvider": { "type": "string", "maxLength": 60 },
+        "totalAmount": { "type": "number" },
+        "remainingAmount": { "type": "number" },
+        "accountNumber": { "type": "string", "maxLength": 80 },
+        "accountName": { "type": "string", "maxLength": 120 },
+        "notes": { "type": "string", "maxLength": 400 },
+        "authorId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "authorName": { "type": "string", "maxLength": 120 },
+        "authorDepartment": { "type": "string", "maxLength": 120 },
+        "createdAt": { "type": "string", "maxLength": 60 },
+        "status": { "type": "string", "enum": ["Open", "Partially Filled", "Completed"] },
+        "fills": { "type": "array" },
+        "comments": { "type": "array" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "type", "walletProvider", "totalAmount", "remainingAmount", "accountNumber", "accountName", "authorId", "authorName", "authorDepartment", "createdAt", "status", "fills", "comments"]
+    },
+    "ChatThread": {
+      "title": "ChatThread",
+      "description": "Department chat thread or direct message metadata.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "title": { "type": "string", "maxLength": 140 },
+        "subtitle": { "type": "string", "maxLength": 200 },
+        "type": { "type": "string", "enum": ["ai", "channel", "dm"] },
+        "participantIds": { "type": "array" },
+        "unreadCount": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "title", "subtitle", "type", "participantIds", "unreadCount"]
+    },
+    "ChatMessage": {
+      "title": "ChatMessage",
+      "description": "Individual message inside a chat thread subcollection.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "senderId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "senderName": { "type": "string", "maxLength": 120 },
+        "senderRole": { "type": "string", "maxLength": 40 },
+        "text": { "type": "string", "minLength": 1, "maxLength": 4000 },
+        "timestamp": { "type": "string", "maxLength": 60 },
+        "createdAtMs": { "type": "number" }
+      },
+      "required": ["id", "senderId", "senderName", "senderRole", "text", "timestamp"]
+    },
+    "NotificationItem": {
+      "title": "NotificationItem",
+      "description": "User or admin notification entry.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "title": { "type": "string", "maxLength": 140 },
+        "body": { "type": "string", "maxLength": 500 },
+        "timestamp": { "type": "string", "maxLength": 60 },
+        "type": { "type": "string", "enum": ["reminder", "payment", "marketplace", "chat", "delivery", "community", "ewallet"] },
+        "read": { "type": "boolean" },
+        "targetUserId": { "type": "string", "maxLength": 128 },
+        "createdAtMs": { "type": "number" }
+      },
+      "required": ["id", "title", "body", "timestamp", "type", "read", "targetUserId"]
+    },
+    "InternalApp": {
+      "title": "InternalApp",
+      "description": "Internal company app directory entry.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "maxLength": 120 },
+        "tagline": { "type": "string", "maxLength": 200 },
+        "description": { "type": "string", "maxLength": 500 },
+        "platform": { "type": "string", "maxLength": 80 },
+        "version": { "type": "string", "maxLength": 40 },
+        "actionType": { "type": "string", "enum": ["open", "install"] },
+        "installed": { "type": "boolean" },
+        "image": { "type": "string", "maxLength": 400000 },
+        "url": { "type": "string", "maxLength": 500 }
+      },
+      "required": ["id", "name", "tagline", "description", "platform", "version", "actionType", "installed", "image", "url"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserAccount" },
+      "description": "Private coworker account records (PII, role, debtBalance, Gmail avatarUrl, Pautangan permissions)."
+    },
+    "/coworkerProfiles/{userId}": {
+      "schema": { "$ref": "#/entities/CoworkerProfile" },
+      "description": "Non-PII coworker display profiles (name, department, avatar) for authenticated display."
+    },
+    "/storeItems/{itemId}": {
+      "schema": { "$ref": "#/entities/StoreItem" },
+      "description": "Public storefront inventory catalog and cost history."
+    },
+    "/stockAdjustments/{adjustmentId}": {
+      "schema": { "$ref": "#/entities/StockAdjustmentLog" },
+      "description": "Admin-only immutable stock adjustment and restock history logs."
+    },
+    "/config/store": {
+      "schema": { "$ref": "#/entities/StoreConfig" },
+      "description": "Public storefront configuration, payment methods, and due days."
+    },
+    "/config/pautangan": {
+      "schema": { "$ref": "#/entities/PautanganSettings" },
+      "description": "Confidential Pautangan settings readable only by Admin or approved coworkers."
+    },
+    "/orders/{orderId}": {
+      "schema": { "$ref": "#/entities/StoreOrder" },
+      "description": "Store and marketplace orders."
+    },
+    "/paymentProofs/{proofId}": {
+      "schema": { "$ref": "#/entities/PaymentProof" },
+      "description": "Digital payment receipt proofs submitted by coworkers."
+    },
+    "/loans/{loanId}": {
+      "schema": { "$ref": "#/entities/LoanRecord" },
+      "description": "Confidential Pautangan cash assistance records."
+    },
+    "/suggestions/{suggestionId}": {
+      "schema": { "$ref": "#/entities/SuggestionItem" },
+      "description": "Community snack suggestions and coworker votes."
+    },
+    "/marketplaceListings/{listingId}": {
+      "schema": { "$ref": "#/entities/MarketplaceListing" },
+      "description": "Coworker for-sale food/product listings."
+    },
+    "/ewalletPosts/{postId}": {
+      "schema": { "$ref": "#/entities/EWalletPost" },
+      "description": "Department peer-to-peer e-wallet buy/sell posts."
+    },
+    "/chatThreads/{threadId}": {
+      "schema": { "$ref": "#/entities/ChatThread" },
+      "description": "Chat channels, AI thread, and direct message threads."
+    },
+    "/chatThreads/{threadId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/ChatMessage" },
+      "description": "Messages inside a chat thread."
+    },
+    "/notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/NotificationItem" },
+      "description": "Targeted user and admin notifications."
+    },
+    "/internalApps/{appId}": {
+      "schema": { "$ref": "#/entities/InternalApp" },
+      "description": "Department companion apps directory."
+    }
+  }
+}

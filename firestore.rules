@@ -1,0 +1,672 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isVerifiedUser() && request.auth.uid == userId;
+    }
+
+    function isBootstrappedSuperAdmin() {
+      return isVerifiedUser() && request.auth.token.email == 'benedictlu23@gmail.com';
+    }
+
+    function isSuperAdmin() {
+      return isBootstrappedSuperAdmin() || (
+        isVerifiedUser() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'super_admin'
+      );
+    }
+
+    function isAdmin() {
+      return isSuperAdmin() || (
+        isVerifiedUser() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        (
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'super_admin'
+        )
+      );
+    }
+
+    function isDeliveryStaff() {
+      return isAdmin() || (
+        isVerifiedUser() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'delivery_staff'
+      );
+    }
+
+    function isPautanganAllowed() {
+      return isAdmin() || (
+        isVerifiedUser() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.pautanganEnabled == true
+      );
+    }
+
+    function isValidUserAccount(data) {
+      return data.keys().hasAll([
+          'id', 'name', 'email', 'department', 'role',
+          'debtBalance', 'pautanganEnabled', 'pautanganLimit',
+          'avatarInitials', 'totalSpent'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'name', 'email', 'department', 'role',
+          'debtBalance', 'pautanganEnabled', 'pautanganLimit',
+          'avatarInitials', 'avatarUrl', 'totalSpent',
+          'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 200 &&
+        data.department is string && data.department.size() <= 120 &&
+        data.role in ['guest', 'member', 'delivery_staff', 'admin', 'super_admin'] &&
+        data.debtBalance is number && data.debtBalance >= 0 &&
+        data.pautanganEnabled is bool &&
+        data.pautanganLimit is number && data.pautanganLimit >= 0 &&
+        data.avatarInitials is string && data.avatarInitials.size() <= 6 &&
+        (!('avatarUrl' in data) || (data.avatarUrl is string && data.avatarUrl.size() <= 1000)) &&
+        data.totalSpent is number && data.totalSpent >= 0 &&
+        (!('createdAt' in data) || (data.createdAt is string && data.createdAt.size() <= 60)) &&
+        (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 60));
+    }
+
+    function isValidCoworkerProfile(data) {
+      return data.keys().hasAll(['id', 'name', 'department', 'avatarInitials']) &&
+        data.keys().hasOnly(['id', 'name', 'department', 'avatarInitials', 'avatarUrl', 'updatedAt']) &&
+        isValidId(data.id) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
+        data.department is string && data.department.size() <= 120 &&
+        data.avatarInitials is string && data.avatarInitials.size() <= 6 &&
+        (!('avatarUrl' in data) || (data.avatarUrl is string && data.avatarUrl.size() <= 1000)) &&
+        (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 60));
+    }
+
+    function isValidStoreItem(data) {
+      return data.keys().hasAll([
+          'id', 'name', 'category', 'description',
+          'price', 'costPrice', 'costHistory', 'stock', 'soldCount'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'name', 'category', 'description',
+          'price', 'costPrice', 'costHistory', 'stock', 'soldCount',
+          'image', 'barcode', 'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 140 &&
+        data.category is string && data.category.size() >= 1 && data.category.size() <= 80 &&
+        data.description is string && data.description.size() <= 600 &&
+        data.price is number && data.price >= 0 &&
+        data.costPrice is number && data.costPrice >= 0 &&
+        data.costHistory is list && data.costHistory.size() <= 100 &&
+        data.stock is number && data.stock >= 0 &&
+        data.soldCount is number && data.soldCount >= 0 &&
+        (!('image' in data) || (data.image is string && data.image.size() <= 400000)) &&
+        (!('barcode' in data) || (data.barcode is string && data.barcode.size() <= 64)) &&
+        (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 60));
+    }
+
+    function isValidStockAdjustment(data) {
+      return data.keys().hasAll([
+          'id', 'itemId', 'itemName', 'itemCategory', 'adjustmentType',
+          'reason', 'previousStock', 'delta', 'newStock', 'unitCostAtTime',
+          'adjustedById', 'adjustedByName', 'createdAt', 'createdAtMs'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'itemId', 'itemName', 'itemCategory', 'barcode',
+          'adjustmentType', 'reason', 'note', 'previousStock', 'delta',
+          'newStock', 'unitCostAtTime', 'adjustedById', 'adjustedByName',
+          'createdAt', 'createdAtMs'
+        ]) &&
+        isValidId(data.id) &&
+        isValidId(data.itemId) &&
+        data.itemName is string && data.itemName.size() >= 1 && data.itemName.size() <= 140 &&
+        data.itemCategory is string && data.itemCategory.size() >= 1 && data.itemCategory.size() <= 80 &&
+        (!('barcode' in data) || (data.barcode is string && data.barcode.size() <= 64)) &&
+        data.adjustmentType in ['add', 'deduct', 'recount', 'restock'] &&
+        data.reason is string && data.reason.size() >= 1 && data.reason.size() <= 120 &&
+        (!('note' in data) || (data.note is string && data.note.size() <= 400)) &&
+        data.previousStock is number && data.previousStock >= 0 &&
+        data.delta is number &&
+        data.newStock is number && data.newStock >= 0 &&
+        data.newStock == data.previousStock + data.delta &&
+        data.unitCostAtTime is number && data.unitCostAtTime >= 0 &&
+        isValidId(data.adjustedById) &&
+        data.adjustedByName is string && data.adjustedByName.size() >= 1 && data.adjustedByName.size() <= 120 &&
+        data.createdAt is string && data.createdAt.size() >= 1 && data.createdAt.size() <= 80 &&
+        data.createdAtMs is number && data.createdAtMs > 0;
+    }
+
+    function isValidStoreConfig(data) {
+      return data.keys().hasAll([
+          'storeAnnouncement', 'deliveryEnabled', 'deliveryFee',
+          'walletAccountName', 'walletAccountNumber',
+          'categories', 'paymentMethods', 'dueDays'
+        ]) &&
+        data.keys().hasOnly([
+          'storeAnnouncement', 'deliveryEnabled', 'deliveryFee',
+          'walletAccountName', 'walletAccountNumber',
+          'categories', 'paymentMethods', 'dueDays',
+          'ownerCommissionEarned', 'updatedAt'
+        ]) &&
+        data.storeAnnouncement is string && data.storeAnnouncement.size() <= 500 &&
+        data.deliveryEnabled is bool &&
+        data.deliveryFee is number && data.deliveryFee >= 0 &&
+        data.walletAccountName is string && data.walletAccountName.size() <= 120 &&
+        data.walletAccountNumber is string && data.walletAccountNumber.size() <= 60 &&
+        data.categories is list && data.categories.size() <= 30 &&
+        data.paymentMethods is list && data.paymentMethods.size() <= 20 &&
+        data.dueDays is list && data.dueDays.size() == 2 &&
+        (!('ownerCommissionEarned' in data) || (data.ownerCommissionEarned is number && data.ownerCommissionEarned >= 0)) &&
+        (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 60));
+    }
+
+    function isValidPautanganConfig(data) {
+      return data.keys().hasAll(['globalEnabled', 'monthlyInterestRate', 'dueDays', 'availableTerms']) &&
+        data.keys().hasOnly(['globalEnabled', 'monthlyInterestRate', 'dueDays', 'availableTerms', 'updatedAt']) &&
+        data.globalEnabled is bool &&
+        data.monthlyInterestRate is number && data.monthlyInterestRate >= 0 && data.monthlyInterestRate <= 50 &&
+        data.dueDays is list && data.dueDays.size() == 2 &&
+        data.availableTerms is list && data.availableTerms.size() >= 1 && data.availableTerms.size() <= 24 &&
+        (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 60));
+    }
+
+    function isValidOrder(data) {
+      return data.keys().hasAll([
+          'id', 'userId', 'userName', 'items', 'totalAmount',
+          'fulfillment', 'paymentMethod', 'status', 'createdAt',
+          'orderDateIso', 'source', 'logs'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'userId', 'userName', 'items', 'totalAmount',
+          'deliveryFee', 'deliveryCommission', 'fulfillment', 'deliveryNote',
+          'paymentMethod', 'status', 'deliveryStatus', 'assignedRunnerId',
+          'assignedRunner', 'cashCollected', 'createdAt', 'orderDateIso',
+          'deliveredAt', 'dueDateLabel', 'source', 'commissionEarned',
+          'logs', 'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        isValidId(data.userId) &&
+        data.userName is string && data.userName.size() >= 1 && data.userName.size() <= 120 &&
+        data.items is list && data.items.size() <= 50 &&
+        data.totalAmount is number && data.totalAmount >= 0 &&
+        data.fulfillment in ['Pickup', 'Delivery'] &&
+        data.paymentMethod is string && data.paymentMethod.size() >= 1 && data.paymentMethod.size() <= 80 &&
+        data.status in ['Confirmed', 'Pending Payment Proof', 'Completed'] &&
+        data.createdAt is string && data.createdAt.size() <= 80 &&
+        data.orderDateIso is string && data.orderDateIso.size() <= 40 &&
+        data.source in ['store', 'marketplace'] &&
+        data.logs is list && data.logs.size() <= 50 &&
+        (!('deliveryFee' in data) || data.deliveryFee is number) &&
+        (!('deliveryCommission' in data) || data.deliveryCommission is number) &&
+        (!('deliveryNote' in data) || (data.deliveryNote is string && data.deliveryNote.size() <= 300)) &&
+        (!('deliveryStatus' in data) || data.deliveryStatus in ['Pending Dispatch', 'Out for Delivery', 'Delivered']) &&
+        (!('assignedRunnerId' in data) || (data.assignedRunnerId is string && data.assignedRunnerId.size() <= 128)) &&
+        (!('assignedRunner' in data) || (data.assignedRunner is string && data.assignedRunner.size() <= 120)) &&
+        (!('cashCollected' in data) || data.cashCollected is bool) &&
+        (!('deliveredAt' in data) || (data.deliveredAt is string && data.deliveredAt.size() <= 80)) &&
+        (!('dueDateLabel' in data) || (data.dueDateLabel is string && data.dueDateLabel.size() <= 80)) &&
+        (!('commissionEarned' in data) || data.commissionEarned is number) &&
+        (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 60));
+    }
+
+    function isValidPaymentProof(data) {
+      return data.keys().hasAll([
+          'id', 'userId', 'userName', 'amount', 'channel',
+          'referenceNo', 'purpose', 'imageDataUrl', 'submittedAt', 'status'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'userId', 'userName', 'amount', 'channel',
+          'referenceNo', 'purpose', 'imageDataUrl', 'submittedAt', 'status',
+          'reviewedBy', 'reviewedAt', 'orderId', 'loanId', 'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        isValidId(data.userId) &&
+        data.userName is string && data.userName.size() >= 1 && data.userName.size() <= 120 &&
+        data.amount is number && data.amount > 0 &&
+        data.channel is string && data.channel.size() >= 1 && data.channel.size() <= 60 &&
+        data.referenceNo is string && data.referenceNo.size() >= 1 && data.referenceNo.size() <= 100 &&
+        data.purpose in ['Store Debt Settlement', 'Order Payment', 'Pautangan Repayment'] &&
+        data.imageDataUrl is string && data.imageDataUrl.size() <= 400000 &&
+        data.submittedAt is string && data.submittedAt.size() <= 80 &&
+        data.status in ['pending', 'approved', 'rejected'] &&
+        (!('reviewedBy' in data) || (data.reviewedBy is string && data.reviewedBy.size() <= 120)) &&
+        (!('reviewedAt' in data) || (data.reviewedAt is string && data.reviewedAt.size() <= 80)) &&
+        (!('orderId' in data) || (data.orderId is string && data.orderId.size() <= 128)) &&
+        (!('loanId' in data) || (data.loanId is string && data.loanId.size() <= 128)) &&
+        (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 60));
+    }
+
+    function isValidLoan(data) {
+      return data.keys().hasAll([
+          'id', 'userId', 'userName', 'principal', 'interestRate',
+          'months', 'totalPayable', 'remainingBalance', 'status',
+          'createdAt', 'nextDueDate', 'repayments', 'installments'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'userId', 'userName', 'principal', 'interestRate',
+          'months', 'totalPayable', 'remainingBalance', 'status',
+          'createdAt', 'nextDueDate', 'repayments', 'installments', 'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        isValidId(data.userId) &&
+        data.userName is string && data.userName.size() >= 1 && data.userName.size() <= 120 &&
+        data.principal is number && data.principal >= 100 &&
+        data.interestRate is number && data.interestRate >= 0 &&
+        data.months is number && data.months >= 1 && data.months <= 36 &&
+        data.totalPayable is number && data.totalPayable >= data.principal &&
+        data.remainingBalance is number && data.remainingBalance >= 0 &&
+        data.status in ['Active', 'Settled', 'Pending Approval'] &&
+        data.createdAt is string && data.createdAt.size() <= 40 &&
+        data.nextDueDate is string && data.nextDueDate.size() <= 40 &&
+        data.repayments is list && data.repayments.size() <= 100 &&
+        data.installments is list && data.installments.size() <= 48 &&
+        (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 60));
+    }
+
+    function isValidSuggestion(data) {
+      return data.keys().hasAll([
+          'id', 'title', 'category', 'reason', 'requestedById',
+          'requestedByName', 'createdAt', 'voterIds', 'voterNames', 'status'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'title', 'category', 'reason', 'requestedById',
+          'requestedByName', 'createdAt', 'voterIds', 'voterNames', 'status', 'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 140 &&
+        data.category is string && data.category.size() >= 1 && data.category.size() <= 80 &&
+        data.reason is string && data.reason.size() <= 400 &&
+        isValidId(data.requestedById) &&
+        data.requestedByName is string && data.requestedByName.size() <= 120 &&
+        data.createdAt is string && data.createdAt.size() <= 60 &&
+        data.voterIds is list && data.voterIds.size() <= 200 &&
+        data.voterNames is list && data.voterNames.size() <= 200 &&
+        data.status in ['Open for Votes', 'Reviewing', 'Added to Pantry'] &&
+        (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 60));
+    }
+
+    function isValidMarketplaceListing(data) {
+      return data.keys().hasAll([
+          'id', 'sellerId', 'sellerName', 'sellerDepartment', 'title',
+          'description', 'price', 'stock', 'soldCount', 'commissionType',
+          'commissionValue', 'approvalStatus', 'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'sellerId', 'sellerName', 'sellerDepartment', 'title',
+          'description', 'price', 'stock', 'soldCount', 'commissionType',
+          'commissionValue', 'approvalStatus', 'createdAt', 'image', 'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        isValidId(data.sellerId) &&
+        data.sellerName is string && data.sellerName.size() <= 120 &&
+        data.sellerDepartment is string && data.sellerDepartment.size() <= 120 &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 140 &&
+        data.description is string && data.description.size() <= 600 &&
+        data.price is number && data.price >= 0 &&
+        data.stock is number && data.stock >= 0 &&
+        data.soldCount is number && data.soldCount >= 0 &&
+        data.commissionType in ['percentage', 'fixed'] &&
+        data.commissionValue is number && data.commissionValue >= 0 &&
+        data.approvalStatus in ['pending', 'approved', 'rejected'] &&
+        data.createdAt is string && data.createdAt.size() <= 60 &&
+        (!('image' in data) || (data.image is string && data.image.size() <= 400000)) &&
+        (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 60));
+    }
+
+    function isValidEWalletPost(data) {
+      return data.keys().hasAll([
+          'id', 'type', 'walletProvider', 'totalAmount', 'remainingAmount',
+          'accountNumber', 'accountName', 'authorId', 'authorName',
+          'authorDepartment', 'createdAt', 'status', 'fills', 'comments'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'type', 'walletProvider', 'totalAmount', 'remainingAmount',
+          'accountNumber', 'accountName', 'notes', 'authorId', 'authorName',
+          'authorDepartment', 'createdAt', 'status', 'fills', 'comments', 'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        data.type in ['sell', 'buy'] &&
+        data.walletProvider is string && data.walletProvider.size() <= 60 &&
+        data.totalAmount is number && data.totalAmount > 0 &&
+        data.remainingAmount is number && data.remainingAmount >= 0 &&
+        data.accountNumber is string && data.accountNumber.size() <= 80 &&
+        data.accountName is string && data.accountName.size() <= 120 &&
+        (!('notes' in data) || (data.notes is string && data.notes.size() <= 400)) &&
+        isValidId(data.authorId) &&
+        data.authorName is string && data.authorName.size() <= 120 &&
+        data.authorDepartment is string && data.authorDepartment.size() <= 120 &&
+        data.createdAt is string && data.createdAt.size() <= 60 &&
+        data.status in ['Open', 'Partially Filled', 'Completed'] &&
+        data.fills is list && data.fills.size() <= 100 &&
+        data.comments is list && data.comments.size() <= 200 &&
+        (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 60));
+    }
+
+    function isValidChatThread(data) {
+      return data.keys().hasAll(['id', 'title', 'subtitle', 'type', 'participantIds', 'unreadCount']) &&
+        data.keys().hasOnly(['id', 'title', 'subtitle', 'type', 'participantIds', 'unreadCount', 'updatedAt']) &&
+        isValidId(data.id) &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 140 &&
+        data.subtitle is string && data.subtitle.size() <= 200 &&
+        data.type in ['ai', 'channel', 'dm'] &&
+        data.participantIds is list && data.participantIds.size() <= 50 &&
+        data.unreadCount is number && data.unreadCount >= 0 &&
+        (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 60));
+    }
+
+    function isValidChatMessage(data) {
+      return data.keys().hasAll(['id', 'senderId', 'senderName', 'senderRole', 'text', 'timestamp']) &&
+        data.keys().hasOnly(['id', 'senderId', 'senderName', 'senderRole', 'text', 'timestamp', 'createdAtMs']) &&
+        isValidId(data.id) &&
+        data.senderId is string && data.senderId.size() >= 1 && data.senderId.size() <= 128 &&
+        data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 120 &&
+        data.senderRole is string && data.senderRole.size() >= 1 && data.senderRole.size() <= 40 &&
+        data.text is string && data.text.size() >= 1 && data.text.size() <= 4000 &&
+        data.timestamp is string && data.timestamp.size() <= 60 &&
+        (!('createdAtMs' in data) || data.createdAtMs is number);
+    }
+
+    function isValidNotification(data) {
+      return data.keys().hasAll(['id', 'title', 'body', 'timestamp', 'type', 'read', 'targetUserId']) &&
+        data.keys().hasOnly(['id', 'title', 'body', 'timestamp', 'type', 'read', 'targetUserId', 'createdAtMs']) &&
+        isValidId(data.id) &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 140 &&
+        data.body is string && data.body.size() >= 1 && data.body.size() <= 500 &&
+        data.timestamp is string && data.timestamp.size() <= 60 &&
+        data.type in ['reminder', 'payment', 'marketplace', 'chat', 'delivery', 'community', 'ewallet'] &&
+        data.read is bool &&
+        data.targetUserId is string && data.targetUserId.size() >= 1 && data.targetUserId.size() <= 128 &&
+        (!('createdAtMs' in data) || data.createdAtMs is number);
+    }
+
+    function isValidInternalApp(data) {
+      return data.keys().hasAll(['id', 'name', 'tagline', 'description', 'platform', 'version', 'actionType', 'installed', 'image', 'url']) &&
+        data.keys().hasOnly(['id', 'name', 'tagline', 'description', 'platform', 'version', 'actionType', 'installed', 'image', 'url']) &&
+        isValidId(data.id) &&
+        data.name is string && data.name.size() <= 120 &&
+        data.tagline is string && data.tagline.size() <= 200 &&
+        data.description is string && data.description.size() <= 500 &&
+        data.platform is string && data.platform.size() <= 80 &&
+        data.version is string && data.version.size() <= 40 &&
+        data.actionType in ['open', 'install'] &&
+        data.installed is bool &&
+        data.image is string && data.image.size() <= 400000 &&
+        data.url is string && data.url.size() <= 500;
+    }
+
+    // Connection test document for startup validation
+    match /test/connection {
+      allow get: if true;
+    }
+
+    // Private User Accounts (PII & RBAC)
+    match /users/{userId} {
+      allow get: if isOwner(userId) || isAdmin();
+      allow list: if isAdmin();
+
+      allow create: if isValidId(userId) && isVerifiedUser() && isValidUserAccount(incoming()) && (
+        isAdmin() ||
+        (
+          isOwner(userId) &&
+          incoming().id == request.auth.uid &&
+          incoming().debtBalance == 0 &&
+          incoming().totalSpent == 0 &&
+          (
+            (isBootstrappedSuperAdmin() && incoming().role == 'super_admin' && incoming().pautanganEnabled == true) ||
+            (!isBootstrappedSuperAdmin() && incoming().role == 'member' && incoming().pautanganEnabled == false && incoming().pautanganLimit == 0)
+          )
+        )
+      );
+
+      allow update: if isValidId(userId) && isVerifiedUser() && isValidUserAccount(incoming()) && (
+        // Super Admin can edit any user including roles, limits, and Pautangan access
+        isSuperAdmin() ||
+        // Admin can update user balances, Pautangan limits/access, and profile info (cannot promote to super_admin)
+        (isAdmin() && incoming().role != 'super_admin') ||
+        // Owner updating only their own display name, department, initials, Gmail avatarUrl, or self-checkout debtBalance/totalSpent
+        (
+          isOwner(userId) &&
+          incoming().id == existing().id &&
+          incoming().email == existing().email &&
+          incoming().role == existing().role &&
+          incoming().pautanganEnabled == existing().pautanganEnabled &&
+          incoming().pautanganLimit == existing().pautanganLimit &&
+          (
+            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'department', 'avatarInitials', 'avatarUrl', 'updatedAt']) ||
+            (
+              incoming().diff(existing()).affectedKeys().hasOnly(['debtBalance', 'totalSpent', 'updatedAt']) &&
+              incoming().debtBalance >= existing().debtBalance &&
+              incoming().totalSpent >= existing().totalSpent
+            )
+          )
+        )
+      );
+
+      allow delete: if isValidId(userId) && isSuperAdmin();
+    }
+
+    // Non-PII Coworker Profiles (no email, no debtBalance, no Pautangan fields)
+    match /coworkerProfiles/{userId} {
+      allow get, list: if isVerifiedUser();
+      allow create: if isValidId(userId) && isVerifiedUser() && isValidCoworkerProfile(incoming()) && (isOwner(userId) || isAdmin());
+      allow update: if isValidId(userId) && isVerifiedUser() && isValidCoworkerProfile(incoming()) && (isOwner(userId) || isAdmin());
+      allow delete: if isValidId(userId) && isSuperAdmin();
+    }
+
+    // Public Storefront Items
+    match /storeItems/{itemId} {
+      allow get, list: if true;
+      allow create: if isValidId(itemId) && isAdmin() && isValidStoreItem(incoming());
+      allow update: if isValidId(itemId) && isVerifiedUser() && isValidStoreItem(incoming()) && (
+        isAdmin() ||
+        (
+          incoming().diff(existing()).affectedKeys().hasOnly(['stock', 'soldCount', 'updatedAt']) &&
+          incoming().stock <= existing().stock &&
+          incoming().soldCount >= existing().soldCount
+        )
+      );
+      allow delete: if isValidId(itemId) && isAdmin();
+    }
+
+    // Admin-Only Immutable Stock Adjustment & Restock History Logs
+    match /stockAdjustments/{adjustmentId} {
+      allow get: if isValidId(adjustmentId) && isAdmin();
+      allow list: if isAdmin();
+      allow create: if isVerifiedUser() &&
+        isValidId(adjustmentId) &&
+        isValidStockAdjustment(incoming()) &&
+        incoming().id == adjustmentId &&
+        incoming().adjustedById == request.auth.uid &&
+        isAdmin() &&
+        exists(/databases/$(database)/documents/storeItems/$(incoming().itemId));
+      allow update: if false;
+      allow delete: if isValidId(adjustmentId) && isSuperAdmin();
+    }
+
+    // Storefront Config (public readable for landing page summary & payment options)
+    match /config/store {
+      allow get: if true;
+      allow create, update: if isAdmin() && isValidStoreConfig(incoming());
+    }
+
+    // Confidential Pautangan Settings
+    match /config/pautangan {
+      allow get: if isPautanganAllowed();
+      allow create, update: if isAdmin() && isValidPautanganConfig(incoming());
+    }
+
+    // Store & Marketplace Orders
+    match /orders/{orderId} {
+      allow get: if isValidId(orderId) && (isDeliveryStaff() || (isVerifiedUser() && existing().userId == request.auth.uid));
+      allow list: if isDeliveryStaff() || (isVerifiedUser() && resource.data.userId == request.auth.uid);
+      allow create: if isValidId(orderId) && isVerifiedUser() && isValidOrder(incoming()) && (
+        isAdmin() || incoming().userId == request.auth.uid
+      );
+      allow update: if isValidId(orderId) && isVerifiedUser() && isValidOrder(incoming()) && (
+        isAdmin() ||
+        (isDeliveryStaff() && incoming().diff(existing()).affectedKeys().hasOnly(['deliveryStatus', 'cashCollected', 'deliveredAt', 'assignedRunnerId', 'assignedRunner', 'logs', 'updatedAt']))
+      );
+      allow delete: if isValidId(orderId) && isSuperAdmin();
+    }
+
+    // Payment Proofs
+    match /paymentProofs/{proofId} {
+      allow get: if isValidId(proofId) && (isAdmin() || (isVerifiedUser() && existing().userId == request.auth.uid));
+      allow list: if isAdmin() || (isVerifiedUser() && resource.data.userId == request.auth.uid);
+      allow create: if isValidId(proofId) && isVerifiedUser() && isValidPaymentProof(incoming()) && (
+        isAdmin() || (incoming().userId == request.auth.uid && incoming().status == 'pending')
+      );
+      allow update: if isValidId(proofId) && isAdmin() && isValidPaymentProof(incoming());
+      allow delete: if isValidId(proofId) && isSuperAdmin();
+    }
+
+    // Confidential Pautangan Loans
+    match /loans/{loanId} {
+      allow get: if isValidId(loanId) && (isAdmin() || (isPautanganAllowed() && existing().userId == request.auth.uid));
+      allow list: if isAdmin() || (isVerifiedUser() && resource.data.userId == request.auth.uid);
+      allow create: if isValidId(loanId) && isPautanganAllowed() && isValidLoan(incoming()) && (
+        isAdmin() || incoming().userId == request.auth.uid
+      );
+      allow update: if isValidId(loanId) && isPautanganAllowed() && isValidLoan(incoming()) && (
+        isAdmin() ||
+        (existing().userId == request.auth.uid && incoming().userId == existing().userId && incoming().diff(existing()).affectedKeys().hasOnly(['repayments', 'installments', 'remainingBalance', 'status', 'updatedAt']))
+      );
+      allow delete: if isValidId(loanId) && isSuperAdmin();
+    }
+
+    // Community Suggestions
+    match /suggestions/{suggestionId} {
+      allow get, list: if isVerifiedUser();
+      allow create: if isValidId(suggestionId) && isVerifiedUser() && isValidSuggestion(incoming()) && (
+        isAdmin() || incoming().requestedById == request.auth.uid
+      );
+      allow update: if isValidId(suggestionId) && isVerifiedUser() && isValidSuggestion(incoming()) && (
+        isAdmin() ||
+        incoming().diff(existing()).affectedKeys().hasOnly(['voterIds', 'voterNames', 'updatedAt'])
+      );
+      allow delete: if isValidId(suggestionId) && isAdmin();
+    }
+
+    // Coworker For-Sale Marketplace Listings
+    match /marketplaceListings/{listingId} {
+      allow get: if isValidId(listingId) && (isAdmin() || (isVerifiedUser() && (existing().approvalStatus == 'approved' || existing().sellerId == request.auth.uid)));
+      allow list: if isAdmin() || (isVerifiedUser() && (resource.data.approvalStatus == 'approved' || resource.data.sellerId == request.auth.uid));
+      allow create: if isValidId(listingId) && isVerifiedUser() && isValidMarketplaceListing(incoming()) && (
+        isAdmin() || (incoming().sellerId == request.auth.uid && incoming().approvalStatus == 'pending')
+      );
+      allow update: if isValidId(listingId) && isVerifiedUser() && isValidMarketplaceListing(incoming()) && (
+        isAdmin() ||
+        (
+          incoming().diff(existing()).affectedKeys().hasOnly(['stock', 'soldCount', 'updatedAt']) &&
+          incoming().stock <= existing().stock &&
+          incoming().soldCount >= existing().soldCount
+        )
+      );
+      allow delete: if isValidId(listingId) && isAdmin();
+    }
+
+    // P2P E-Wallet Exchange Posts
+    match /ewalletPosts/{postId} {
+      allow get, list: if isVerifiedUser();
+      allow create: if isValidId(postId) && isVerifiedUser() && isValidEWalletPost(incoming()) && (
+        isAdmin() || incoming().authorId == request.auth.uid
+      );
+      allow update: if isValidId(postId) && isVerifiedUser() && isValidEWalletPost(incoming()) && (
+        isAdmin() ||
+        existing().authorId == request.auth.uid ||
+        incoming().diff(existing()).affectedKeys().hasOnly(['remainingAmount', 'status', 'fills', 'comments', 'updatedAt'])
+      );
+      allow delete: if isValidId(postId) && isAdmin();
+    }
+
+    // Chat Threads & Messages Subcollection
+    match /chatThreads/{threadId} {
+      allow get: if isValidId(threadId) && (isSuperAdmin() || (isVerifiedUser() && (existing().type == 'ai' || existing().type == 'channel' || request.auth.uid in existing().participantIds)));
+      allow list: if isSuperAdmin() || (isVerifiedUser() && (resource.data.type == 'ai' || resource.data.type == 'channel' || request.auth.uid in resource.data.participantIds));
+      allow create: if isValidId(threadId) && isVerifiedUser() && isValidChatThread(incoming());
+      allow update: if isValidId(threadId) && isVerifiedUser() && isValidChatThread(incoming()) && (
+        isAdmin() || incoming().diff(existing()).affectedKeys().hasOnly(['unreadCount', 'updatedAt'])
+      );
+      allow delete: if isValidId(threadId) && isSuperAdmin();
+
+      match /messages/{messageId} {
+        allow get, list: if isValidId(threadId) && (
+          isSuperAdmin() ||
+          (isVerifiedUser() && (
+            get(/databases/$(database)/documents/chatThreads/$(threadId)).data.type == 'ai' ||
+            get(/databases/$(database)/documents/chatThreads/$(threadId)).data.type == 'channel' ||
+            request.auth.uid in get(/databases/$(database)/documents/chatThreads/$(threadId)).data.participantIds
+          ))
+        );
+        allow create: if isValidId(threadId) && isValidId(messageId) && isVerifiedUser() && isValidChatMessage(incoming()) && (
+          isAdmin() ||
+          incoming().senderId == request.auth.uid ||
+          (incoming().senderId == 'ai' && incoming().senderRole == 'ai')
+        );
+        allow delete: if isValidId(threadId) && isValidId(messageId) && isSuperAdmin();
+      }
+    }
+
+    // Notifications (strictly role- and user-scoped; never exposed to unauthenticated/guest users)
+    match /notifications/{notificationId} {
+      allow get: if isValidId(notificationId) && isVerifiedUser() && (
+        existing().targetUserId == request.auth.uid ||
+        existing().targetUserId == 'all' ||
+        (existing().targetUserId == 'delivery' && isDeliveryStaff()) ||
+        (existing().targetUserId == 'admins' && isAdmin()) ||
+        (existing().targetUserId == 'super_admin' && isSuperAdmin())
+      );
+      allow list: if isVerifiedUser() && (
+        resource.data.targetUserId == request.auth.uid ||
+        resource.data.targetUserId == 'all' ||
+        (resource.data.targetUserId == 'delivery' && isDeliveryStaff()) ||
+        (resource.data.targetUserId == 'admins' && isAdmin()) ||
+        (resource.data.targetUserId == 'super_admin' && isSuperAdmin())
+      );
+      allow create: if isValidId(notificationId) && isVerifiedUser() && isValidNotification(incoming());
+      allow update: if isValidId(notificationId) && isVerifiedUser() && isValidNotification(incoming()) && (
+        (existing().targetUserId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['read'])) ||
+        (existing().targetUserId == 'delivery' && isDeliveryStaff() && incoming().diff(existing()).affectedKeys().hasOnly(['read'])) ||
+        (existing().targetUserId == 'admins' && isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['read'])) ||
+        (existing().targetUserId == 'super_admin' && isSuperAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['read'])) ||
+        isSuperAdmin()
+      );
+      allow delete: if isValidId(notificationId) && isAdmin();
+    }
+
+    // Internal Companion Apps Directory
+    match /internalApps/{appId} {
+      allow get, list: if isVerifiedUser();
+      allow create, update: if isValidId(appId) && isVerifiedUser() && isValidInternalApp(incoming()) && (
+        isAdmin() || incoming().diff(existing()).affectedKeys().hasOnly(['installed'])
+      );
+      allow delete: if isValidId(appId) && isAdmin();
+    }
+  }
+}

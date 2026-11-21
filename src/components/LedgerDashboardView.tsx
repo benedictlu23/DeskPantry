@@ -23,6 +23,7 @@ import {
   UserRole,
 } from '../types';
 import { formatPHP, isDateWithinPeriod } from '../utils/format';
+import { compressImageFileToDataUrl } from '../utils/image';
 import { PaymentMethodCard } from './PaymentMethodCard';
 
 interface LedgerDashboardViewProps {
@@ -130,11 +131,9 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') setPayImage(reader.result);
-    };
-    reader.readAsDataURL(file);
+    void compressImageFileToDataUrl(file).then((compressed) => {
+      setPayImage(compressed);
+    });
   };
 
   const handleProofSubmit = (e: React.FormEvent) => {

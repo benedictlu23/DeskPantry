@@ -18,6 +18,7 @@ import {
   UserRole,
 } from '../types';
 import { formatPHP } from '../utils/format';
+import { compressImageFileToDataUrl } from '../utils/image';
 import { PaymentMethodCard } from './PaymentMethodCard';
 
 interface PautanganViewProps {
@@ -120,11 +121,9 @@ export const PautanganView: React.FC<PautanganViewProps> = ({
   const handleProofUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') setRepayProof(reader.result);
-    };
-    reader.readAsDataURL(file);
+    void compressImageFileToDataUrl(file).then((compressed) => {
+      setRepayProof(compressed);
+    });
   };
 
   const handleRepaySubmit = (e: React.FormEvent) => {

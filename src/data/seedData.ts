@@ -198,7 +198,7 @@ export const INITIAL_USERS: UserAccount[] = [
     name: 'Benedict Lu',
     email: 'benedictlu23@gmail.com',
     department: 'Engineering Ops',
-    role: UserRole.Admin,
+    role: UserRole.SuperAdmin,
     debtBalance: 420,
     pautanganEnabled: true,
     pautanganLimit: 6000,
@@ -915,6 +915,7 @@ export const INITIAL_NOTIFICATIONS: NotificationItem[] = [
     timestamp: '1h ago',
     type: 'reminder',
     read: false,
+    targetUserId: 'all',
   },
   {
     id: 'notif-2',
@@ -923,6 +924,7 @@ export const INITIAL_NOTIFICATIONS: NotificationItem[] = [
     timestamp: '25m ago',
     type: 'payment',
     read: false,
+    targetUserId: 'admins',
   },
   {
     id: 'notif-4',
@@ -931,14 +933,16 @@ export const INITIAL_NOTIFICATIONS: NotificationItem[] = [
     timestamp: '12m ago',
     type: 'delivery',
     read: false,
+    targetUserId: 'delivery',
   },
   {
     id: 'notif-3',
-    title: 'Community Feed: New For-Sale Submission',
-    body: 'Marco Villanueva submitted "Creamy Buko Pandan Salad" for Admin approval.',
+    title: 'For-Sale Listing Pending Super Admin Approval',
+    body: 'Marco Villanueva submitted "Creamy Buko Pandan Salad" for approval.',
     timestamp: '8m ago',
-    type: 'community',
+    type: 'marketplace',
     read: false,
+    targetUserId: 'super_admin',
   },
 ];
 

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   BellRing,
   Check,
@@ -9,6 +9,7 @@ import {
   FileText,
   History,
   Plus,
+  ScanBarcode,
   Settings,
   ShieldAlert,
   ShieldCheck,
@@ -29,6 +30,7 @@ import {
   PaymentMethod,
   PaymentMethodConfig,
   PaymentProof,
+  StockAdjustmentLog,
   StoreConfig,
   StoreItem,
   StoreOrder,
@@ -37,6 +39,11 @@ import {
 } from '../types';
 import { exportExcelWorkbook, exportPdfReport } from '../utils/exportReports';
 import { computeCommission, formatPHP } from '../utils/format';
+import { compressImageFileToDataUrl } from '../utils/image';
+import { AdminRestockPanel } from './AdminRestockPanel';
+import { AdminSalesOrderPanel } from './AdminSalesOrderPanel';
+import { AdminStockAdjustmentPanel } from './AdminStockAdjustmentPanel';
+import { BarcodeScannerModal } from './BarcodeScannerModal';
 import { PaymentMethodCard } from './PaymentMethodCard';
 
 interface AdminConsoleViewProps {
@@ -53,6 +60,7 @@ interface AdminConsoleViewProps {
   ownerTotalCommission: number;
   onReviewProof: (proofId: string, decision: 'approved' | 'rejected') => void;
   onReviewListing: (listingId: string, decision: 'approved' | 'rejected') => void;
+  onDeleteListing: (listingId: string) => Promise<void> | void;
   onUpdateDueDays: (day1: number, day2: number) => void;
   onSendReminders: () => void;
   onUpdatePautanganGlobal: (enabled: boolean, rate: number) => void;
@@ -63,15 +71,25 @@ interface AdminConsoleViewProps {
   onUpdateStoreConfig: (next: StoreConfig) => void;
   onAddCategory: (category: string) => void;
   onEditCategory: (oldName: string, newName: string) => void;
-  onRemoveCategory: (category: string) => void;
-  onRestockItem: (itemId: string, amount: number) => void;
+  onRemoveCategory: (category: string) => Promise<void> | void;
+  onRestockItem: (
+    itemId: string,
+    amount: number,
+    options?: {
+      unitCost?: number;
+      sellingPrice?: number;
+      note?: string;
+      barcode?: string;
+    }
+  ) => Promise<void> | void;
+  onUpdateItemBarcode: (itemId: string, barcode: string) => Promise<void> | void;
   onUpdateItemPricing: (
     itemId: string,
     sellingPrice: number,
     costPrice: number,
     note?: string
   ) => void;
-  onDeleteItem: (itemId: string) => void;
+  onDeleteItem: (itemId: string) => Promise<void> | void;
   onAddItem: (item: {
     name: string;
     category: string;
@@ -80,8 +98,26 @@ interface AdminConsoleViewProps {
     costPrice: number;
     stock: number;
     image?: string;
-  }) => void;
-  onSwitchDemoRole: (role: UserRole) => void;
+    barcode?: string;
+  }) => Promise<void> | void;
+  onCreateManualSale: (payload: {
+    customerMode: 'walkin' | 'coworker';
+    customerId?: string;
+    customerName: string;
+    items: Array<{ itemId: string; quantity: number }>;
+    fulfillment: FulfillmentType;
+    deliveryNote?: string;
+    paymentMethod: string;
+  }) => Promise<StoreOrder>;
+  stockAdjustments: StockAdjustmentLog[];
+  onAdjustStock: (payload: {
+    itemId: string;
+    adjustmentType: 'add' | 'deduct' | 'recount';
+    quantityOrCount: number;
+    reason: string;
+    note?: string;
+  }) => Promise<StockAdjustmentLog>;
+  onExitPreview?: () => void;
 }
 
 export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
@@ -98,6 +134,7 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
   ownerTotalCommission,
   onReviewProof,
   onReviewListing,
+  onDeleteListing,
   onUpdateDueDays,
   onSendReminders,
   onUpdatePautanganGlobal,
@@ -110,13 +147,20 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
   onEditCategory,
   onRemoveCategory,
   onRestockItem,
+  onUpdateItemBarcode,
   onUpdateItemPricing,
   onDeleteItem,
   onAddItem,
-  onSwitchDemoRole,
+  onCreateManualSale,
+  stockAdjustments,
+  onAdjustStock,
+  onExitPreview,
 }) => {
   const [subTab, setSubTab] = useState<
     | 'items'
+    | 'restock'
+    | 'stockAdjustments'
+    | 'salesOrder'
     | 'config'
     | 'pautangan'
     | 'superadmin'
@@ -134,6 +178,19 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
   const [deliveryEnabled, setDeliveryEnabled] = useState(storeConfig.deliveryEnabled);
   const [deliveryFee, setDeliveryFee] = useState(String(storeConfig.deliveryFee));
   const [banner, setBanner] = useState('');
+  const [errorBanner, setErrorBanner] = useState('');
+
+  useEffect(() => {
+    setDay1Input(String(pautanganSettings.dueDays[0]));
+    setDay2Input(String(pautanganSettings.dueDays[1]));
+    setRateInput(String(pautanganSettings.monthlyInterestRate));
+  }, [pautanganSettings.dueDays, pautanganSettings.monthlyInterestRate]);
+
+  useEffect(() => {
+    setAnnouncement(storeConfig.storeAnnouncement);
+    setDeliveryEnabled(storeConfig.deliveryEnabled);
+    setDeliveryFee(String(storeConfig.deliveryFee));
+  }, [storeConfig.storeAnnouncement, storeConfig.deliveryEnabled, storeConfig.deliveryFee]);
 
   // New store item state
   const [newName, setNewName] = useState('');
@@ -142,6 +199,8 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
   const [newCost, setNewCost] = useState('55');
   const [newStock, setNewStock] = useState('15');
   const [newDesc, setNewDesc] = useState('');
+  const [newBarcode, setNewBarcode] = useState('');
+  const [isAddBarcodeScannerOpen, setIsAddBarcodeScannerOpen] = useState(false);
   const [newImage, setNewImage] = useState(ITEM_IMAGE_PRESETS[0].path);
 
   // Cost History Modal
@@ -208,16 +267,19 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
   const topCustomers = [...users].sort((a, b) => b.totalSpent - a.totalSpent);
 
   const showToast = (msg: string) => {
+    setErrorBanner('');
     setBanner(msg);
     setTimeout(() => setBanner(''), 4500);
   };
 
+  const showErrorToast = (msg: string) => {
+    setBanner('');
+    setErrorBanner(msg);
+    setTimeout(() => setErrorBanner(''), 6000);
+  };
+
   const readFileAsDataUrl = (file: File, onLoad: (url: string) => void) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') onLoad(reader.result);
-    };
-    reader.readAsDataURL(file);
+    void compressImageFileToDataUrl(file).then(onLoad);
   };
 
   const handleSaveStoreConfig = (e: React.FormEvent) => {
@@ -234,21 +296,27 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
     showToast('Store configuration, delivery fee, and cutoff dates saved.');
   };
 
-  const handleAddStoreItem = (e: React.FormEvent) => {
+  const handleAddStoreItem = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newName.trim()) return;
-    onAddItem({
-      name: newName.trim(),
-      category: newCat || storeConfig.categories[0] || 'Snacks & Pastries',
-      price: Math.max(1, Number(newPrice) || 50),
-      costPrice: Math.max(0, Number(newCost) || 30),
-      stock: Math.max(1, Number(newStock) || 10),
-      description: newDesc.trim() || 'Freshly added department pantry item.',
-      image: newImage || undefined,
-    });
-    setNewName('');
-    setNewDesc('');
-    showToast('New store item & initial cost history added to DeskPantry.');
+    try {
+      await onAddItem({
+        name: newName.trim(),
+        category: newCat || storeConfig.categories[0] || 'Snacks & Pastries',
+        price: Math.max(1, Number(newPrice) || 50),
+        costPrice: Math.max(0, Number(newCost) || 30),
+        stock: Math.max(1, Number(newStock) || 10),
+        description: newDesc.trim() || 'Freshly added department pantry item.',
+        image: newImage || undefined,
+        barcode: newBarcode.trim() || undefined,
+      });
+      setNewName('');
+      setNewDesc('');
+      setNewBarcode('');
+      showToast('New store item & initial cost history added to DeskPantry.');
+    } catch {
+      showErrorToast('Failed to register store item. Please check Admin permissions or connection.');
+    }
   };
 
   const handleUpdatePaymentMethodField = (
@@ -399,6 +467,37 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
           l.status,
         ]),
       },
+      {
+        name: 'Stock Adjustment Logs',
+        headers: [
+          'Date & Time',
+          'Item',
+          'Category',
+          'Barcode',
+          'Type',
+          'Reason',
+          'Previous Stock',
+          'Delta',
+          'New Stock',
+          'Cost Impact (PHP)',
+          'Adjusted By',
+          'Note',
+        ],
+        rows: stockAdjustments.map((log) => [
+          log.createdAt,
+          log.itemName,
+          log.itemCategory,
+          log.barcode || '-',
+          log.adjustmentType,
+          log.reason,
+          log.previousStock,
+          log.delta,
+          log.newStock,
+          log.delta * (log.unitCostAtTime ?? 0),
+          log.adjustedByName,
+          log.note || '-',
+        ]),
+      },
     ]);
     showToast('Exported DeskPantry Excel workbook (.xls).');
   };
@@ -455,6 +554,13 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
               `${l.id} | ${l.userName} | ${l.months} mo @ ${l.interestRate}% | Total: PHP ${l.totalPayable} | Rem: PHP ${l.remainingBalance} | ${l.status}`
           ),
         },
+        {
+          heading: '6. Stock Adjustment History Logs',
+          lines: stockAdjustments.slice(0, 40).map(
+            (log) =>
+              `${log.createdAt} | ${log.itemName} | ${log.adjustmentType.toUpperCase()} (${log.reason}) | ${log.previousStock} -> ${log.newStock} (${log.delta >= 0 ? `+${log.delta}` : log.delta}) | By ${log.adjustedByName}`
+          ),
+        },
       ]
     );
     showToast('Downloaded DeskPantry PDF report (.pdf).');
@@ -485,6 +591,13 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
         <div className="flex items-center gap-2.5 rounded-xl border border-emerald-200 dark:border-emerald-800/70 bg-emerald-50 dark:bg-emerald-950/50 px-4 py-3 text-sm text-emerald-900 dark:text-emerald-200">
           <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
           <span>{banner}</span>
+        </div>
+      )}
+
+      {errorBanner && (
+        <div className="flex items-center gap-2.5 rounded-xl border border-red-200 dark:border-red-800/70 bg-red-50 dark:bg-red-950/50 px-4 py-3 text-sm text-red-900 dark:text-red-200">
+          <ShieldAlert className="w-4 h-4 text-red-600 dark:text-red-400 shrink-0" />
+          <span>{errorBanner}</span>
         </div>
       )}
 
@@ -531,10 +644,13 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
       {/* Sub-navigation */}
       <div className="flex items-center gap-1 p-1 rounded-xl bg-stone-100 dark:bg-[#121D1B] border border-stone-200 dark:border-stone-800 overflow-x-auto">
         {[
-          { id: 'items', label: 'Items, Categories & Cost History' },
-          { id: 'config', label: 'Store & Payment Methods' },
-          { id: 'pautangan', label: 'Cash Assistance Config' },
-          { id: 'superadmin', label: 'Super Admin: Roles & Delivery Staff' },
+          { id: 'items', label: 'Items & Categories' },
+          { id: 'restock', label: 'Restock & Barcode' },
+          { id: 'stockAdjustments', label: 'Stock Adjustment' },
+          { id: 'salesOrder', label: 'Sales Order (Walk-In)' },
+          { id: 'config', label: 'Store & Payments' },
+          { id: 'pautangan', label: 'Cash Assistance' },
+          { id: 'superadmin', label: 'Super Admin: Roles & Delivery' },
           { id: 'proofs', label: `Proofs & Reminders (${pendingProofs.length})` },
           { id: 'marketplace', label: `For-Sale (${pendingListings.length})` },
           { id: 'reports', label: 'Reports & Export (Excel/PDF)' },
@@ -651,17 +767,42 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                 </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-medium text-stone-700 dark:text-stone-300 mb-1">
-                  Description
-                </label>
-                <input
-                  type="text"
-                  value={newDesc}
-                  onChange={(e) => setNewDesc(e.target.value)}
-                  placeholder="Short description shown on the product card"
-                  className="w-full min-h-[40px] rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-[#172523] px-3 py-2 text-sm text-stone-900 dark:text-stone-100 focus:border-teal-700 focus:outline-none"
-                />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-stone-700 dark:text-stone-300 mb-1">
+                    Description
+                  </label>
+                  <input
+                    type="text"
+                    value={newDesc}
+                    onChange={(e) => setNewDesc(e.target.value)}
+                    placeholder="Short description shown on the product card"
+                    className="w-full min-h-[40px] rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-[#172523] px-3 py-2 text-sm text-stone-900 dark:text-stone-100 focus:border-teal-700 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-stone-700 dark:text-stone-300 mb-1">
+                    Barcode (Optional)
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      maxLength={64}
+                      value={newBarcode}
+                      onChange={(e) => setNewBarcode(e.target.value)}
+                      placeholder="EAN / UPC / SKU code"
+                      className="flex-1 min-w-0 min-h-[40px] rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-[#172523] px-3 py-2 text-sm font-mono text-stone-900 dark:text-stone-100 focus:border-teal-700 focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setIsAddBarcodeScannerOpen(true)}
+                      className="min-h-[40px] inline-flex items-center gap-1.5 rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-[#172523] px-3 py-2 text-xs font-semibold text-stone-700 dark:text-stone-200 hover:bg-stone-100 dark:hover:bg-[#1F312E] shrink-0 cursor-pointer"
+                    >
+                      <ScanBarcode className="w-4 h-4 text-teal-700 dark:text-teal-400" />
+                      <span>Scan</span>
+                    </button>
+                  </div>
+                </div>
               </div>
 
               {/* Item Image on Registration: Upload File OR Choose Preset */}
@@ -822,9 +963,13 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                           <button
                             type="button"
                             disabled={storeConfig.categories.length <= 1}
-                            onClick={() => {
-                              onRemoveCategory(cat);
-                              showToast(`Removed category "${cat}".`);
+                            onClick={async () => {
+                              try {
+                                await onRemoveCategory(cat);
+                                showToast(`Removed category "${cat}".`);
+                              } catch {
+                                showErrorToast(`Failed to remove category "${cat}". Please check permissions.`);
+                              }
                             }}
                             className="min-h-[32px] min-w-[32px] flex items-center justify-center rounded-lg border border-stone-200 dark:border-stone-700 text-stone-500 dark:text-stone-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 disabled:opacity-40 cursor-pointer"
                             aria-label={`Remove ${cat}`}
@@ -869,7 +1014,12 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                     return (
                       <tr key={item.id}>
                         <td className="py-3 px-5 font-semibold text-stone-900 dark:text-stone-100">
-                          {item.name}
+                          <div>{item.name}</div>
+                          {item.barcode && (
+                            <div className="text-[11px] font-mono font-normal text-stone-500 dark:text-stone-400 mt-0.5">
+                              Barcode: {item.barcode}
+                            </div>
+                          )}
                         </td>
                         <td className="py-3 px-5 text-xs text-stone-500 dark:text-stone-400">
                           {item.category}
@@ -909,9 +1059,13 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                             </button>
                             <button
                               type="button"
-                              onClick={() => {
-                                onRestockItem(item.id, 10);
-                                showToast(`Restocked +10 units of ${item.name}.`);
+                              onClick={async () => {
+                                try {
+                                  await onRestockItem(item.id, 10);
+                                  showToast(`Restocked +10 units of ${item.name}.`);
+                                } catch {
+                                  showErrorToast(`Could not restock ${item.name}. Please check Admin permissions.`);
+                                }
                               }}
                               className="min-h-[32px] rounded-lg border border-stone-200 dark:border-stone-700 px-2.5 py-1 text-xs font-semibold text-stone-700 dark:text-stone-200 hover:bg-stone-50 dark:hover:bg-[#172523] cursor-pointer"
                             >
@@ -919,9 +1073,13 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                             </button>
                             <button
                               type="button"
-                              onClick={() => {
-                                onDeleteItem(item.id);
-                                showToast(`Removed ${item.name} from storefront.`);
+                              onClick={async () => {
+                                try {
+                                  await onDeleteItem(item.id);
+                                  showToast(`Removed ${item.name} from storefront.`);
+                                } catch {
+                                  showErrorToast(`Could not delete ${item.name}. Please check Admin permissions or connection.`);
+                                }
                               }}
                               className="min-h-[32px] min-w-[32px] flex items-center justify-center rounded-lg border border-stone-200 dark:border-stone-700 text-stone-500 dark:text-stone-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 cursor-pointer"
                               aria-label={`Delete ${item.name}`}
@@ -938,6 +1096,45 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {/* Tab: Restock & Barcode Scanner */}
+      {subTab === 'restock' && (
+        <AdminRestockPanel
+          items={items}
+          onRestockItem={onRestockItem}
+          onUpdateItemBarcode={onUpdateItemBarcode}
+          onCreateNewWithBarcode={(code) => {
+            setNewBarcode(code);
+            setSubTab('items');
+          }}
+          onNotifySuccess={showToast}
+          onNotifyError={showErrorToast}
+        />
+      )}
+
+      {/* Tab: Stock Adjustment & History Logs */}
+      {subTab === 'stockAdjustments' && (
+        <AdminStockAdjustmentPanel
+          items={items}
+          stockAdjustments={stockAdjustments}
+          onAdjustStock={onAdjustStock}
+          onNotifySuccess={showToast}
+          onNotifyError={showErrorToast}
+        />
+      )}
+
+      {/* Tab: Sales Order (Walk-In & Counter POS) */}
+      {subTab === 'salesOrder' && (
+        <AdminSalesOrderPanel
+          items={items}
+          users={users}
+          orders={orders}
+          storeConfig={storeConfig}
+          onCreateManualSale={onCreateManualSale}
+          onNotifySuccess={showToast}
+          onNotifyError={showErrorToast}
+        />
       )}
 
       {/* Tab 2: Store Settings & Configurable Payment Methods */}
@@ -1528,13 +1725,15 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
               <p className="text-xs text-amber-900 dark:text-amber-300 max-w-md mx-auto">
                 Only Super Admin can register new Delivery Staff accounts and configure user access roles across the organization.
               </p>
-              <button
-                type="button"
-                onClick={() => onSwitchDemoRole(UserRole.SuperAdmin)}
-                className="min-h-[42px] rounded-xl bg-teal-700 px-5 py-2 text-xs font-semibold text-white hover:bg-teal-800 cursor-pointer"
-              >
-                Switch to Super Admin Role
-              </button>
+              {onExitPreview && (
+                <button
+                  type="button"
+                  onClick={onExitPreview}
+                  className="min-h-[42px] rounded-xl bg-teal-700 px-5 py-2 text-xs font-semibold text-white hover:bg-teal-800 cursor-pointer"
+                >
+                  Exit Preview to Super Admin
+                </button>
+              )}
             </div>
           ) : (
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
@@ -1640,11 +1839,27 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                       {users.map((u) => (
                         <tr key={u.id}>
                           <td className="py-3.5 px-5">
-                            <div className="font-semibold text-stone-900 dark:text-stone-100">
-                              {u.name}
-                            </div>
-                            <div className="text-xs text-stone-500 dark:text-stone-400">
-                              {u.email}
+                            <div className="flex items-center gap-2.5">
+                              {u.avatarUrl ? (
+                                <img
+                                  src={u.avatarUrl}
+                                  alt={u.name}
+                                  referrerPolicy="no-referrer"
+                                  className="w-8 h-8 rounded-full object-cover border border-stone-200 dark:border-stone-700 shrink-0"
+                                />
+                              ) : (
+                                <span className="w-8 h-8 rounded-full bg-teal-700/15 dark:bg-teal-500/20 text-teal-800 dark:text-teal-200 text-xs font-bold flex items-center justify-center shrink-0">
+                                  {u.avatarInitials}
+                                </span>
+                              )}
+                              <div className="min-w-0">
+                                <div className="font-semibold text-stone-900 dark:text-stone-100 truncate">
+                                  {u.name}
+                                </div>
+                                <div className="text-xs text-stone-500 dark:text-stone-400 truncate">
+                                  {u.email}
+                                </div>
+                              </div>
                             </div>
                           </td>
                           <td className="py-3.5 px-5 text-xs text-stone-600 dark:text-stone-400">
@@ -1835,7 +2050,7 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2 shrink-0">
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
                     {l.approvalStatus === 'pending' ? (
                       <>
                         <button
@@ -1859,21 +2074,64 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                           Approve Listing
                         </button>
                       </>
+                    ) : l.approvalStatus === 'approved' ? (
+                      <>
+                        <span className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 mr-1">
+                          Published
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onReviewListing(l.id, 'rejected');
+                            showToast(`Unpublished "${l.title}" — removed from the public For-Sale feed.`);
+                          }}
+                          className="min-h-[38px] rounded-xl border border-stone-200 dark:border-stone-700 px-3 py-1.5 text-xs font-semibold text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950/40 cursor-pointer"
+                        >
+                          Unpublish
+                        </button>
+                      </>
                     ) : (
-                      <span
-                        className={`text-xs font-semibold ${
-                          l.approvalStatus === 'approved'
-                            ? 'text-emerald-700 dark:text-emerald-400'
-                            : 'text-red-600 dark:text-red-400'
-                        }`}
-                      >
-                        {l.approvalStatus === 'approved' ? 'Published' : 'Rejected'}
-                      </span>
+                      <>
+                        <span className="text-xs font-semibold text-red-600 dark:text-red-400 mr-1">
+                          Rejected
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onReviewListing(l.id, 'approved');
+                            showToast(`Re-approved "${l.title}" — now live on the For-Sale feed.`);
+                          }}
+                          className="min-h-[38px] rounded-xl border border-stone-200 dark:border-stone-700 px-3 py-1.5 text-xs font-semibold text-teal-700 dark:text-teal-300 hover:bg-teal-50 dark:hover:bg-teal-950/40 cursor-pointer"
+                        >
+                          Re-Approve
+                        </button>
+                      </>
                     )}
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await onDeleteListing(l.id);
+                          showToast(`Permanently removed "${l.title}".`);
+                        } catch {
+                          showErrorToast(`Could not delete "${l.title}". Please check Admin permissions or connection.`);
+                        }
+                      }}
+                      title="Delete listing permanently"
+                      aria-label={`Delete ${l.title}`}
+                      className="min-h-[38px] min-w-[38px] inline-flex items-center justify-center rounded-xl border border-stone-200 dark:border-stone-700 text-stone-500 dark:text-stone-400 hover:bg-red-50 dark:hover:bg-red-950/40 hover:text-red-600 dark:hover:text-red-400 cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
                   </div>
                 </div>
               );
             })}
+            {listings.length === 0 && (
+              <div className="p-8 text-center text-xs text-stone-500 dark:text-stone-400">
+                No coworker marketplace listings submitted yet.
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -2157,6 +2415,17 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
           </div>
         </div>
       )}
+
+      <BarcodeScannerModal
+        isOpen={isAddBarcodeScannerOpen}
+        title="Scan Barcode for New Item"
+        subtitle="Scan the packaging barcode to pre-fill the SKU/barcode field for this new pantry item."
+        onClose={() => setIsAddBarcodeScannerOpen(false)}
+        onDetected={(code) => {
+          setNewBarcode(code.slice(0, 64));
+          setIsAddBarcodeScannerOpen(false);
+        }}
+      />
     </div>
   );
 };

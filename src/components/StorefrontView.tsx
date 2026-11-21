@@ -24,6 +24,7 @@ import {
   UserRole,
 } from '../types';
 import { formatPHP } from '../utils/format';
+import { compressImageFileToDataUrl } from '../utils/image';
 import { PaymentMethodCard } from './PaymentMethodCard';
 import { ProductImage } from './ProductImage';
 
@@ -104,7 +105,8 @@ export const StorefrontView: React.FC<StorefrontViewProps> = ({
         !q ||
         item.name.toLowerCase().includes(q) ||
         item.description.toLowerCase().includes(q) ||
-        item.category.toLowerCase().includes(q);
+        item.category.toLowerCase().includes(q) ||
+        (item.barcode ? item.barcode.toLowerCase().includes(q) : false);
       return matchCategory && matchQuery;
     });
   }, [items, selectedCategory, searchQuery]);
@@ -137,14 +139,14 @@ export const StorefrontView: React.FC<StorefrontViewProps> = ({
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        setProofImage(reader.result);
+    void compressImageFileToDataUrl(file)
+      .then((compressed) => {
+        setProofImage(compressed);
         setCheckoutError('');
-      }
-    };
-    reader.readAsDataURL(file);
+      })
+      .catch(() => {
+        setCheckoutError('Could not process selected image file.');
+      });
   };
 
   const handleCheckoutSubmit = (e: React.FormEvent) => {
