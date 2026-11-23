@@ -1,6 +1,6 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { AlertCircle, Bot, MessageSquare, Send, X } from 'lucide-react';
-import { StoreItem, UserAccount, UserRole } from '../types';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { AlertCircle, Bot, Lock, MessageSquare, Send, X } from 'lucide-react';
+import { ChatThread, StoreItem, UserAccount, UserRole } from '../types';
 import { ChatbotPersona } from './ChatHubView';
 
 interface FloatingMessage {
@@ -16,6 +16,9 @@ interface GeminiChatbotDrawerProps {
   storeItems: StoreItem[];
   dueDays: [number, number];
   pendingProofsCount: number;
+  aiThread?: ChatThread | null;
+  onSendMessage?: (threadId: string, text: string) => void;
+  onReceiveAiReply?: (threadId: string, replyText: string) => void;
 }
 
 export const GeminiChatbotDrawer: React.FC<GeminiChatbotDrawerProps> = ({
@@ -24,13 +27,16 @@ export const GeminiChatbotDrawer: React.FC<GeminiChatbotDrawerProps> = ({
   storeItems,
   dueDays,
   pendingProofsCount,
+  aiThread,
+  onSendMessage,
+  onReceiveAiReply,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [persona, setPersona] = useState<ChatbotPersona>('concierge');
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [messages, setMessages] = useState<FloatingMessage[]>([
+  const [guestMessages, setGuestMessages] = useState<FloatingMessage[]>([
     {
       id: 'init-1',
       role: 'model',
@@ -40,27 +46,47 @@ export const GeminiChatbotDrawer: React.FC<GeminiChatbotDrawerProps> = ({
   ]);
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const isSignedInPrivate = Boolean(
+    currentUser && currentRole !== UserRole.Guest && aiThread && onSendMessage && onReceiveAiReply
+  );
+
+  const displayedMessages = useMemo<FloatingMessage[]>(() => {
+    if (isSignedInPrivate && aiThread) {
+      return aiThread.messages.map((m) => ({
+        id: m.id,
+        role: m.senderRole === 'ai' ? 'model' : 'user',
+        text: m.text,
+        timestamp: m.timestamp,
+      }));
+    }
+    return guestMessages;
+  }, [isSignedInPrivate, aiThread, guestMessages]);
 
   useEffect(() => {
     if (isOpen) {
       bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [isOpen, messages.length, loading]);
+  }, [isOpen, displayedMessages.length, loading]);
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = input.trim();
     if (!trimmed || loading) return;
 
-    const userMsg: FloatingMessage = {
-      id: `u-${Date.now()}`,
-      role: 'user',
-      text: trimmed,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    };
+    const historyForApi = displayedMessages.map((m) => ({ role: m.role, text: m.text }));
 
-    const nextHistory = [...messages, userMsg];
-    setMessages(nextHistory);
+    if (isSignedInPrivate && aiThread && onSendMessage) {
+      onSendMessage(aiThread.id, trimmed);
+    } else {
+      const userMsg: FloatingMessage = {
+        id: `u-${Date.now()}`,
+        role: 'user',
+        text: trimmed,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      };
+      setGuestMessages((prev) => [...prev, userMsg]);
+    }
+
     setInput('');
     setLoading(true);
     setError('');
@@ -77,7 +103,7 @@ export const GeminiChatbotDrawer: React.FC<GeminiChatbotDrawerProps> = ({
         body: JSON.stringify({
           message: trimmed,
           persona,
-          history: messages.map((m) => ({ role: m.role, text: m.text })),
+          history: historyForApi,
           context: {
             userName: currentUser?.name ?? 'Visitor',
             userRole: currentRole,
@@ -94,18 +120,22 @@ export const GeminiChatbotDrawer: React.FC<GeminiChatbotDrawerProps> = ({
         return;
       }
       if (typeof data?.reply === 'string') {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: `m-${Date.now()}`,
-            role: 'model',
-            text: data.reply,
-            timestamp: new Date().toLocaleTimeString([], {
-              hour: '2-digit',
-              minute: '2-digit',
-            }),
-          },
-        ]);
+        if (isSignedInPrivate && aiThread && onReceiveAiReply) {
+          onReceiveAiReply(aiThread.id, data.reply);
+        } else {
+          setGuestMessages((prev) => [
+            ...prev,
+            {
+              id: `m-${Date.now()}`,
+              role: 'model',
+              text: data.reply,
+              timestamp: new Date().toLocaleTimeString([], {
+                hour: '2-digit',
+                minute: '2-digit',
+              }),
+            },
+          ]);
+        }
       }
     } catch {
       setError('Network error while contacting DeskPantry AI.');
@@ -137,7 +167,16 @@ export const GeminiChatbotDrawer: React.FC<GeminiChatbotDrawerProps> = ({
               </div>
               <div>
                 <div className="text-sm font-bold leading-tight">DeskPantry Assistant</div>
-                <div className="text-[11px] text-teal-100/80">Multi-turn Gemini Helper</div>
+                <div className="text-[11px] text-teal-100/80 flex items-center gap-1">
+                  {isSignedInPrivate ? (
+                    <>
+                      <Lock className="w-3 h-3 text-teal-200" />
+                      <span>Private AI Chat · Visible only to you</span>
+                    </>
+                  ) : (
+                    <span>Multi-turn Gemini Helper</span>
+                  )}
+                </div>
               </div>
             </div>
             <button
@@ -172,7 +211,7 @@ export const GeminiChatbotDrawer: React.FC<GeminiChatbotDrawerProps> = ({
           </div>
 
           <div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-[260px]">
-            {messages.map((m) => (
+            {displayedMessages.map((m) => (
               <div
                 key={m.id}
                 className={`flex flex-col ${m.role === 'user' ? 'items-end' : 'items-start'}`}

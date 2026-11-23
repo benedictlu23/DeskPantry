@@ -2,6 +2,7 @@ import { User } from 'firebase/auth';
 import {
   collection,
   deleteDoc,
+  deleteField,
   doc,
   getDoc,
   getDocFromServer,
@@ -35,6 +36,7 @@ import { db, handleFirestoreError, OperationType } from '../firebase';
 import {
   ChatMessage,
   ChatThread,
+  CoworkerProfile,
   EWalletPost,
   InternalApp,
   LoanRecord,
@@ -48,6 +50,7 @@ import {
   StoreConfig,
   StoreItem,
   StoreOrder,
+  SuggestionComment,
   SuggestionItem,
   UserAccount,
   UserRole,
@@ -122,6 +125,8 @@ export async function upsertUserOnAuth(firebaseUser: User): Promise<UserAccount>
             existing.department || (isBootstrapped ? 'Engineering Ops' : 'Department Staff'),
             120
           ),
+          tableRow: clampString(existing.tableRow || '', 40),
+          tableNumber: clampString(existing.tableNumber || '', 40),
           role: isBootstrapped ? UserRole.SuperAdmin : existing.role,
           pautanganEnabled: isBootstrapped ? true : Boolean(existing.pautanganEnabled),
           pautanganLimit: isBootstrapped
@@ -137,6 +142,8 @@ export async function upsertUserOnAuth(firebaseUser: User): Promise<UserAccount>
           name: clampString(googleName, 120),
           email,
           department: isBootstrapped ? 'Engineering Ops' : 'Department Staff',
+          tableRow: '',
+          tableNumber: '',
           role: isBootstrapped ? UserRole.SuperAdmin : UserRole.Member,
           debtBalance: 0,
           pautanganEnabled: isBootstrapped,
@@ -151,6 +158,8 @@ export async function upsertUserOnAuth(firebaseUser: User): Promise<UserAccount>
         const patch: Record<string, unknown> = {
           name: nextAccount.name,
           department: nextAccount.department,
+          tableRow: nextAccount.tableRow || '',
+          tableNumber: nextAccount.tableNumber || '',
           avatarInitials: nextAccount.avatarInitials,
           avatarUrl: nextAccount.avatarUrl || '',
           updatedAt: nowIso,
@@ -177,6 +186,8 @@ export async function upsertUserOnAuth(firebaseUser: User): Promise<UserAccount>
       id: uid,
       name: nextAccount.name,
       department: nextAccount.department,
+      tableRow: nextAccount.tableRow || '',
+      tableNumber: nextAccount.tableNumber || '',
       avatarInitials: nextAccount.avatarInitials,
       avatarUrl: nextAccount.avatarUrl || '',
       updatedAt: nowIso,
@@ -398,13 +409,7 @@ export function subscribeAuthenticatedData(
     onCurrentUser: (user: UserAccount) => void;
     onUsers: (users: UserAccount[]) => void;
     onCoworkerProfiles: (
-      profiles: Array<{
-        id: string;
-        name: string;
-        department: string;
-        avatarInitials: string;
-        avatarUrl?: string;
-      }>
+      profiles: CoworkerProfile[]
     ) => void;
     onOrders: (orders: StoreOrder[]) => void;
     onProofs: (proofs: PaymentProof[]) => void;
@@ -444,16 +449,7 @@ export function subscribeAuthenticatedData(
     onSnapshot(
       collection(db, 'coworkerProfiles'),
       (snap) => {
-        const profiles = snap.docs.map(
-          (d) =>
-            d.data() as {
-              id: string;
-              name: string;
-              department: string;
-              avatarInitials: string;
-              avatarUrl?: string;
-            }
-        );
+        const profiles = snap.docs.map((d) => d.data() as CoworkerProfile);
         handlers.onCoworkerProfiles(profiles);
       },
       (err) => handleFirestoreError(err, OperationType.LIST, 'coworkerProfiles')
@@ -717,9 +713,7 @@ export function subscribeAuthenticatedData(
     onSnapshot(
       collection(db, 'internalApps'),
       (snap) => {
-        if (!snap.empty) {
-          handlers.onInternalApps(snap.docs.map((d) => d.data() as InternalApp));
-        }
+        handlers.onInternalApps(snap.docs.map((d) => d.data() as InternalApp));
       },
       (err) => handleFirestoreError(err, OperationType.LIST, 'internalApps')
     )
@@ -785,27 +779,15 @@ export function subscribeAuthenticatedData(
       )
     );
   } else {
-    let aiThreads: Array<Omit<ChatThread, 'messages'>> = [];
     let channelThreads: Array<Omit<ChatThread, 'messages'>> = [];
-    let dmThreads: Array<Omit<ChatThread, 'messages'>> = [];
+    let participantThreads: Array<Omit<ChatThread, 'messages'>> = [];
     const mergeThreads = () => {
       const map = new Map<string, Omit<ChatThread, 'messages'>>();
-      for (const t of aiThreads) map.set(t.id, t);
       for (const t of channelThreads) map.set(t.id, t);
-      for (const t of dmThreads) map.set(t.id, t);
+      for (const t of participantThreads) map.set(t.id, t);
       syncMessageListeners(Array.from(map.values()));
     };
 
-    unsubs.push(
-      onSnapshot(
-        query(collection(db, 'chatThreads'), where('type', '==', 'ai')),
-        (snap) => {
-          aiThreads = snap.docs.map((d) => d.data() as Omit<ChatThread, 'messages'>);
-          mergeThreads();
-        },
-        (err) => handleFirestoreError(err, OperationType.LIST, 'chatThreads')
-      )
-    );
     unsubs.push(
       onSnapshot(
         query(collection(db, 'chatThreads'), where('type', '==', 'channel')),
@@ -820,7 +802,7 @@ export function subscribeAuthenticatedData(
       onSnapshot(
         query(collection(db, 'chatThreads'), where('participantIds', 'array-contains', uid)),
         (snap) => {
-          dmThreads = snap.docs.map((d) => d.data() as Omit<ChatThread, 'messages'>);
+          participantThreads = snap.docs.map((d) => d.data() as Omit<ChatThread, 'messages'>);
           mergeThreads();
         },
         (err) => handleFirestoreError(err, OperationType.LIST, 'chatThreads')
@@ -949,7 +931,12 @@ export async function saveUserAccount(user: UserAccount): Promise<void> {
   try {
     await setDoc(
       doc(db, 'users', user.id),
-      stripUndefined({ ...user, updatedAt: nowIso }),
+      stripUndefined({
+        ...user,
+        tableRow: clampString(user.tableRow || '', 40),
+        tableNumber: clampString(user.tableNumber || '', 40),
+        updatedAt: nowIso,
+      }),
       { merge: true }
     );
     await setDoc(
@@ -958,6 +945,8 @@ export async function saveUserAccount(user: UserAccount): Promise<void> {
         id: user.id,
         name: user.name,
         department: user.department,
+        tableRow: clampString(user.tableRow || '', 40),
+        tableNumber: clampString(user.tableNumber || '', 40),
         avatarInitials: user.avatarInitials,
         avatarUrl: user.avatarUrl || '',
         updatedAt: nowIso,
@@ -966,6 +955,32 @@ export async function saveUserAccount(user: UserAccount): Promise<void> {
     );
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, `users/${user.id}`);
+  }
+}
+
+export async function updateUserWorkstationProfile(
+  userId: string,
+  workstation: { department: string; tableRow: string; tableNumber: string }
+): Promise<void> {
+  const nowIso = new Date().toISOString();
+  const department = clampString(workstation.department.trim(), 120);
+  const tableRow = clampString(workstation.tableRow.trim(), 40);
+  const tableNumber = clampString(workstation.tableNumber.trim(), 40);
+  try {
+    await updateDoc(doc(db, 'users', userId), {
+      department,
+      tableRow,
+      tableNumber,
+      updatedAt: nowIso,
+    });
+    await updateDoc(doc(db, 'coworkerProfiles', userId), {
+      department,
+      tableRow,
+      tableNumber,
+      updatedAt: nowIso,
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, `users/${userId}`);
   }
 }
 
@@ -1002,6 +1017,7 @@ export async function updateOrderDeliveryFields(
   patch: Partial<
     Pick<
       StoreOrder,
+      | 'status'
       | 'deliveryStatus'
       | 'cashCollected'
       | 'deliveredAt'
@@ -1060,16 +1076,62 @@ export async function saveSuggestion(suggestion: SuggestionItem): Promise<void> 
 export async function updateSuggestionVotes(
   suggestionId: string,
   voterIds: string[],
-  voterNames: string[]
+  voterNames: string[],
+  downvoterIds: string[] = [],
+  downvoterNames: string[] = []
 ): Promise<void> {
   try {
     await updateDoc(doc(db, 'suggestions', suggestionId), {
       voterIds,
       voterNames,
+      downvoterIds,
+      downvoterNames,
       updatedAt: new Date().toISOString(),
     });
   } catch (err) {
     handleFirestoreError(err, OperationType.UPDATE, `suggestions/${suggestionId}`);
+  }
+}
+
+export async function updateSuggestionComments(
+  suggestionId: string,
+  comments: SuggestionComment[]
+): Promise<void> {
+  try {
+    await updateDoc(doc(db, 'suggestions', suggestionId), {
+      comments: stripUndefined(comments.slice(-200)),
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, `suggestions/${suggestionId}`);
+  }
+}
+
+export async function updateSuggestionStatus(
+  suggestionId: string,
+  status: SuggestionItem['status'],
+  addedToStoreAt?: string
+): Promise<void> {
+  try {
+    await updateDoc(
+      doc(db, 'suggestions', suggestionId),
+      stripUndefined({
+        status,
+        addedToStoreAt:
+          status === 'Added to Pantry' ? addedToStoreAt : '',
+        updatedAt: new Date().toISOString(),
+      })
+    );
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, `suggestions/${suggestionId}`);
+  }
+}
+
+export async function deleteSuggestionDoc(suggestionId: string): Promise<void> {
+  try {
+    await deleteDoc(doc(db, 'suggestions', suggestionId));
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, `suggestions/${suggestionId}`);
   }
 }
 
@@ -1296,7 +1358,12 @@ export async function saveEWalletPost(post: EWalletPost): Promise<void> {
 
 export async function updateEWalletPostPartial(
   postId: string,
-  patch: Pick<EWalletPost, 'remainingAmount' | 'status' | 'fills' | 'comments'>
+  patch: Partial<
+    Pick<
+      EWalletPost,
+      'remainingAmount' | 'status' | 'completedAtMs' | 'fills' | 'comments'
+    >
+  >
 ): Promise<void> {
   try {
     await updateDoc(
@@ -1305,6 +1372,82 @@ export async function updateEWalletPostPartial(
     );
   } catch (err) {
     handleFirestoreError(err, OperationType.UPDATE, `ewalletPosts/${postId}`);
+  }
+}
+
+export async function deleteEWalletPost(postId: string): Promise<void> {
+  try {
+    await deleteDoc(doc(db, 'ewalletPosts', postId));
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, `ewalletPosts/${postId}`);
+  }
+}
+
+export async function createChatThread(
+  thread: Omit<ChatThread, 'messages'>
+): Promise<void> {
+  try {
+    const threadRef = doc(db, 'chatThreads', thread.id);
+    const existingSnap = await getDoc(threadRef);
+    if (existingSnap.exists()) {
+      return;
+    }
+    try {
+      await setDoc(
+        threadRef,
+        stripUndefined({
+          id: thread.id,
+          title: clampString(thread.title, 140),
+          subtitle: clampString(thread.subtitle, 200),
+          type: thread.type,
+          participantIds: thread.participantIds.slice(0, 50),
+          unreadCount: Math.max(0, Number(thread.unreadCount) || 0),
+          ...(thread.unreadBy ? { unreadBy: thread.unreadBy } : {}),
+          updatedAt: new Date().toISOString(),
+        })
+      );
+    } catch (writeErr) {
+      // If another participant/tab created the thread concurrently, treat existing doc as success
+      const raceSnap = await getDoc(threadRef).catch(() => null);
+      if (raceSnap?.exists()) {
+        return;
+      }
+      throw writeErr;
+    }
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, `chatThreads/${thread.id}`);
+  }
+}
+
+export async function deleteChatMessage(
+  threadId: string,
+  messageId: string
+): Promise<void> {
+  const path = `chatThreads/${threadId}/messages/${messageId}`;
+  try {
+    await deleteDoc(doc(db, 'chatThreads', threadId, 'messages', messageId));
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, path);
+  }
+}
+
+export async function deleteChatThread(threadId: string): Promise<void> {
+  const path = `chatThreads/${threadId}`;
+  try {
+    const msgsSnap = await getDocsFromServer(
+      collection(db, 'chatThreads', threadId, 'messages')
+    );
+    const refs = msgsSnap.docs.map((d) => d.ref);
+    for (let i = 0; i < refs.length; i += 400) {
+      const batch = writeBatch(db);
+      for (const ref of refs.slice(i, i + 400)) {
+        batch.delete(ref);
+      }
+      await batch.commit();
+    }
+    await deleteDoc(doc(db, 'chatThreads', threadId));
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, path);
   }
 }
 
@@ -1328,13 +1471,18 @@ export async function addChatMessageToThread(
 
 export async function markThreadUnreadCount(
   threadId: string,
-  unreadCount: number
+  unreadCount: number,
+  unreadBy?: Record<string, number>
 ): Promise<void> {
   try {
-    await updateDoc(doc(db, 'chatThreads', threadId), {
-      unreadCount,
-      updatedAt: new Date().toISOString(),
-    });
+    await updateDoc(
+      doc(db, 'chatThreads', threadId),
+      stripUndefined({
+        unreadCount: Math.max(0, Number(unreadCount) || 0),
+        ...(unreadBy !== undefined ? { unreadBy } : {}),
+        updatedAt: new Date().toISOString(),
+      })
+    );
   } catch (err) {
     handleFirestoreError(err, OperationType.UPDATE, `chatThreads/${threadId}`);
   }
@@ -1365,6 +1513,72 @@ export async function markNotificationReadDoc(notifId: string): Promise<void> {
   }
 }
 
+export async function deleteNotificationDoc(notifId: string): Promise<void> {
+  try {
+    await deleteDoc(doc(db, 'notifications', notifId));
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, `notifications/${notifId}`);
+  }
+}
+
+export async function deleteNotificationDocs(notifIds: string[]): Promise<void> {
+  if (notifIds.length === 0) return;
+  try {
+    for (let i = 0; i < notifIds.length; i += 400) {
+      const batch = writeBatch(db);
+      for (const id of notifIds.slice(i, i + 400)) {
+        batch.delete(doc(db, 'notifications', id));
+      }
+      await batch.commit();
+    }
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, 'notifications');
+  }
+}
+
+export async function clearStoreItemImage(itemId: string): Promise<void> {
+  try {
+    await updateDoc(doc(db, 'storeItems', itemId), {
+      image: deleteField(),
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, `storeItems/${itemId}`);
+  }
+}
+
+export async function clearMarketplaceListingImage(listingId: string): Promise<void> {
+  try {
+    await updateDoc(doc(db, 'marketplaceListings', listingId), {
+      image: deleteField(),
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, `marketplaceListings/${listingId}`);
+  }
+}
+
+export async function clearPaymentProofImage(proofId: string): Promise<void> {
+  try {
+    await updateDoc(doc(db, 'paymentProofs', proofId), {
+      imageDataUrl: '',
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, `paymentProofs/${proofId}`);
+  }
+}
+
+export async function clearInternalAppImage(appId: string): Promise<void> {
+  try {
+    await updateDoc(doc(db, 'internalApps', appId), {
+      image: '',
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, `internalApps/${appId}`);
+  }
+}
+
 export async function toggleInternalAppInstalled(
   appId: string,
   installed: boolean
@@ -1373,6 +1587,37 @@ export async function toggleInternalAppInstalled(
     await updateDoc(doc(db, 'internalApps', appId), { installed });
   } catch (err) {
     handleFirestoreError(err, OperationType.UPDATE, `internalApps/${appId}`);
+  }
+}
+
+export async function saveInternalApp(app: InternalApp): Promise<void> {
+  try {
+    await setDoc(
+      doc(db, 'internalApps', app.id),
+      stripUndefined({
+        id: app.id,
+        name: clampString(app.name.trim(), 120),
+        tagline: clampString(app.tagline.trim(), 200),
+        description: clampString(app.description.trim(), 500),
+        platform: clampString(app.platform.trim() || 'Web Workspace', 80),
+        version: clampString(app.version.trim() || 'v1.0', 40),
+        actionType: app.actionType === 'install' ? 'install' : 'open',
+        installed: Boolean(app.installed),
+        image: clampString(app.image, 400000),
+        url: clampString(app.url.trim() || '#', 500),
+      }),
+      { merge: true }
+    );
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, `internalApps/${app.id}`);
+  }
+}
+
+export async function deleteInternalApp(appId: string): Promise<void> {
+  try {
+    await deleteDoc(doc(db, 'internalApps', appId));
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, `internalApps/${appId}`);
   }
 }
 
@@ -1396,6 +1641,7 @@ export interface FullSyncResult {
   sellerConfig: SellerConfig | null;
   currentUser: UserAccount | null;
   users: UserAccount[];
+  coworkerProfiles: CoworkerProfile[];
   orders: StoreOrder[];
   proofs: PaymentProof[];
   suggestions: SuggestionItem[];
@@ -1446,6 +1692,7 @@ export async function syncAllFirestoreDataNow(params: {
     sellerConfig,
     currentUser,
     users,
+    coworkerProfiles,
     boughtOrAllOrders,
     sellerOrders,
     submittedOrAllProofs,
@@ -1469,6 +1716,7 @@ export async function syncAllFirestoreDataNow(params: {
     isAdmin
       ? fetchCollection<UserAccount>(collection(db, 'users'), 'users')
       : Promise.resolve([] as UserAccount[]),
+    fetchCollection<CoworkerProfile>(collection(db, 'coworkerProfiles'), 'coworkerProfiles'),
     fetchCollection<StoreOrder>(
       isDelivery
         ? collection(db, 'orders')
@@ -1554,6 +1802,7 @@ export async function syncAllFirestoreDataNow(params: {
     sellerConfig,
     currentUser,
     users,
+    coworkerProfiles,
     orders,
     proofs,
     suggestions,

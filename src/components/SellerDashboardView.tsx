@@ -34,12 +34,14 @@ import {
 } from '../types';
 import {
   computeCommission,
+  formatBuyerWorkstation,
   formatPHP,
   getOrderItemsSubtotal,
   getOrderRemainingDebt,
   isDateWithinPeriod,
   isOrderPendingSellerConfirmation,
 } from '../utils/format';
+import { ImagePreviewModal, ImagePreviewTarget } from './ImagePreviewModal';
 import { ProductImage } from './ProductImage';
 
 interface SellerDashboardViewProps {
@@ -54,6 +56,7 @@ interface SellerDashboardViewProps {
   onGoToCommunity: (openSellForm?: boolean) => void;
   onConfirmOrder: (orderId: string) => Promise<void>;
   onRejectOrder: (orderId: string) => Promise<void>;
+  onMarkOrderDelivered?: (orderId: string) => Promise<void>;
   onReviewSellerProof: (proofId: string, decision: 'approved' | 'rejected') => Promise<void>;
   onSendDebtReminder: (payload: {
     buyerId: string;
@@ -101,6 +104,7 @@ export const SellerDashboardView: React.FC<SellerDashboardViewProps> = ({
   onGoToCommunity,
   onConfirmOrder,
   onRejectOrder,
+  onMarkOrderDelivered,
   onReviewSellerProof,
   onSendDebtReminder,
   onMarkOrderDebtSettled,
@@ -121,7 +125,9 @@ export const SellerDashboardView: React.FC<SellerDashboardViewProps> = ({
   const [notifiedKeys, setNotifiedKeys] = useState<Record<string, boolean>>({});
   const [settlingOrderId, setSettlingOrderId] = useState<string | null>(null);
   const [confirmingOrderId, setConfirmingOrderId] = useState<string | null>(null);
+  const [markingDeliveredOrderId, setMarkingDeliveredOrderId] = useState<string | null>(null);
   const [reviewingProofId, setReviewingProofId] = useState<string | null>(null);
+  const [previewImage, setPreviewImage] = useState<ImagePreviewTarget | null>(null);
 
   // Per-listing quick edit modal state
   const [editingListing, setEditingListing] = useState<MarketplaceListing | null>(null);
@@ -586,7 +592,7 @@ export const SellerDashboardView: React.FC<SellerDashboardViewProps> = ({
         'success',
         order.fulfillment === 'Pickup'
           ? `Order ${order.id} confirmed & stock released (Pickup completed).`
-          : `Order ${order.id} confirmed, stock released & queued to Delivery Staff.`
+          : `Order ${order.id} confirmed & stock released — ready for you to deliver to buyer's desk.`
       );
     } catch (err) {
       showNotice(
@@ -595,6 +601,25 @@ export const SellerDashboardView: React.FC<SellerDashboardViewProps> = ({
       );
     } finally {
       setConfirmingOrderId(null);
+    }
+  };
+
+  const handleMarkDelivered = async (order: StoreOrder) => {
+    if (!onMarkOrderDelivered) return;
+    setMarkingDeliveredOrderId(order.id);
+    try {
+      await onMarkOrderDelivered(order.id);
+      showNotice(
+        'success',
+        `Order ${order.id} for ${order.userName} marked Delivered by Seller.`
+      );
+    } catch (err) {
+      showNotice(
+        'error',
+        err instanceof Error ? err.message : `Could not mark order ${order.id} delivered.`
+      );
+    } finally {
+      setMarkingDeliveredOrderId(null);
     }
   };
 
@@ -725,6 +750,9 @@ export const SellerDashboardView: React.FC<SellerDashboardViewProps> = ({
       'Order ID',
       'Date',
       'Buyer Name',
+      'Buyer Department',
+      'Table Row',
+      'Table Number',
       'Items',
       'Payment Method',
       'Fulfillment',
@@ -750,6 +778,9 @@ export const SellerDashboardView: React.FC<SellerDashboardViewProps> = ({
         o.id,
         o.createdAt,
         o.userName,
+        o.buyerDepartment || '',
+        o.buyerTableRow || '',
+        o.buyerTableNumber || '',
         itemStr,
         o.paymentMethod,
         o.fulfillment,
@@ -806,7 +837,7 @@ export const SellerDashboardView: React.FC<SellerDashboardViewProps> = ({
             Community Seller Dashboard
           </h1>
           <p className="mt-1 text-sm text-stone-600 dark:text-stone-400">
-            Track your posted Community items, who ordered as Debt, total collectables, payment reminders, and seller configurations.
+            Open to all coworkers for transparent tracking of your posted items, confirmed sales, buyer debt collectables, payment reminders, and seller delivery.
           </p>
         </div>
 
@@ -881,11 +912,31 @@ export const SellerDashboardView: React.FC<SellerDashboardViewProps> = ({
                   className="p-4 sm:px-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
                 >
                   <div className="flex items-start gap-3.5 min-w-0">
-                    <img
-                      src={prf.imageDataUrl}
-                      alt={`Receipt from ${prf.userName}`}
-                      className="w-16 h-20 rounded-xl object-cover border border-stone-200 dark:border-stone-700 shrink-0 bg-stone-50"
-                    />
+                    {prf.imageDataUrl ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setPreviewImage({
+                            src: prf.imageDataUrl,
+                            title: `${prf.userName} · ${prf.channel} Payment Receipt`,
+                            subtitle: `Ref: ${prf.referenceNo} · ${formatPHP(prf.amount, true)}`,
+                          })
+                        }
+                        className="rounded-xl overflow-hidden border border-stone-200 dark:border-stone-700 hover:opacity-90 transition-opacity shrink-0 bg-stone-50 cursor-pointer"
+                        title="Click to preview receipt image"
+                        aria-label={`Preview receipt from ${prf.userName}`}
+                      >
+                        <img
+                          src={prf.imageDataUrl}
+                          alt={`Receipt from ${prf.userName}`}
+                          className="w-16 h-20 object-cover"
+                        />
+                      </button>
+                    ) : (
+                      <div className="w-16 h-20 rounded-xl border border-dashed border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-[#172523] shrink-0 flex items-center justify-center text-[10px] font-semibold text-stone-400 text-center px-1">
+                        Cleared
+                      </div>
+                    )}
                     <div className="min-w-0 space-y-1">
                       <div className="flex flex-wrap items-center gap-2 text-xs text-stone-500 dark:text-stone-400">
                         <span className="font-mono font-semibold text-stone-800 dark:text-stone-200">
@@ -1060,8 +1111,14 @@ export const SellerDashboardView: React.FC<SellerDashboardViewProps> = ({
                         {isDebt ? 'Store Credit (Debt)' : 'Cash'}
                       </span>
                       <span className="text-stone-500 dark:text-stone-400">
-                        {ord.fulfillment}
-                        {!isPickup && ord.deliveryNote ? ` · ${ord.deliveryNote}` : ''} · {ord.createdAt}
+                        {ord.fulfillment === 'Delivery' ? 'Seller Delivery' : ord.fulfillment}
+                        {formatBuyerWorkstation(ord) ? ` · ${formatBuyerWorkstation(ord)}` : ''}
+                        {!isPickup &&
+                        ord.deliveryNote &&
+                        ord.deliveryNote !== formatBuyerWorkstation(ord)
+                          ? ` · ${ord.deliveryNote}`
+                          : ''}{' '}
+                        · {ord.createdAt}
                       </span>
                     </div>
 
@@ -1101,7 +1158,7 @@ export const SellerDashboardView: React.FC<SellerDashboardViewProps> = ({
                           ? 'Confirming...'
                           : isPickup
                             ? 'Confirm & Release Stock'
-                            : 'Confirm & Dispatch'}
+                            : 'Confirm & Prepare Seller Delivery'}
                       </span>
                     </button>
                   </div>
@@ -1134,11 +1191,31 @@ export const SellerDashboardView: React.FC<SellerDashboardViewProps> = ({
                   className="p-3.5 sm:px-5 flex flex-wrap items-center justify-between gap-3 text-xs"
                 >
                   <div className="flex items-center gap-3 min-w-0">
-                    <img
-                      src={prf.imageDataUrl}
-                      alt={`Receipt from ${prf.userName}`}
-                      className="w-10 h-10 rounded-lg object-cover border border-stone-200 dark:border-stone-700 shrink-0"
-                    />
+                    {prf.imageDataUrl ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setPreviewImage({
+                            src: prf.imageDataUrl,
+                            title: `${prf.userName} · ${prf.channel} Payment Receipt`,
+                            subtitle: `Ref: ${prf.referenceNo} · ${formatPHP(prf.amount, true)}`,
+                          })
+                        }
+                        className="rounded-lg overflow-hidden border border-stone-200 dark:border-stone-700 hover:opacity-90 transition-opacity shrink-0 cursor-pointer"
+                        title="Click to preview receipt image"
+                        aria-label={`Preview receipt from ${prf.userName}`}
+                      >
+                        <img
+                          src={prf.imageDataUrl}
+                          alt={`Receipt from ${prf.userName}`}
+                          className="w-10 h-10 object-cover"
+                        />
+                      </button>
+                    ) : (
+                      <div className="w-10 h-10 rounded-lg border border-dashed border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-[#172523] shrink-0 flex items-center justify-center text-[9px] font-semibold text-stone-400">
+                        N/A
+                      </div>
+                    )}
                     <div className="min-w-0">
                       <div className="font-bold text-stone-900 dark:text-stone-100 truncate">
                         {prf.userName} · {formatPHP(prf.amount, true)} ({prf.channel})
@@ -1482,8 +1559,19 @@ export const SellerDashboardView: React.FC<SellerDashboardViewProps> = ({
                                   {order.userName}
                                 </div>
                                 <div className="text-[11px] text-stone-500 dark:text-stone-400">
-                                  {order.fulfillment}
+                                  {order.fulfillment === 'Delivery'
+                                    ? `Seller Delivery${
+                                        order.deliveryStatus === 'Delivered'
+                                          ? ' (Delivered)'
+                                          : ' (Pending Delivery)'
+                                      }`
+                                    : order.fulfillment}
                                 </div>
+                                {formatBuyerWorkstation(order) && (
+                                  <div className="text-[11px] text-stone-500 dark:text-stone-400">
+                                    {formatBuyerWorkstation(order)}
+                                  </div>
+                                )}
                               </td>
 
                               <td className="py-3.5 px-4 max-w-[240px]">
@@ -1553,6 +1641,25 @@ export const SellerDashboardView: React.FC<SellerDashboardViewProps> = ({
 
                               <td className="py-3.5 px-4 text-right whitespace-nowrap">
                                 <div className="inline-flex items-center justify-end gap-1.5">
+                                  {onMarkOrderDelivered &&
+                                    order.fulfillment === 'Delivery' &&
+                                    order.status === 'Confirmed' &&
+                                    order.deliveryStatus !== 'Delivered' && (
+                                      <button
+                                        type="button"
+                                        disabled={markingDeliveredOrderId === order.id}
+                                        onClick={() => void handleMarkDelivered(order)}
+                                        className="min-h-[34px] px-2.5 py-1 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-[11px] font-semibold inline-flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                                      >
+                                        <CheckCircle2 className="w-3 h-3" />
+                                        <span>
+                                          {markingDeliveredOrderId === order.id
+                                            ? 'Updating...'
+                                            : 'Mark Delivered'}
+                                        </span>
+                                      </button>
+                                    )}
+
                                   {unpaid && (
                                     <button
                                       type="button"
@@ -2142,6 +2249,10 @@ export const SellerDashboardView: React.FC<SellerDashboardViewProps> = ({
           </form>
         </div>
       )}
+      <ImagePreviewModal
+        preview={previewImage}
+        onClose={() => setPreviewImage(null)}
+      />
     </div>
   );
 };

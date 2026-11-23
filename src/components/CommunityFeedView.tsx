@@ -3,9 +3,15 @@ import {
   BarChart3,
   Bell,
   CheckCircle2,
+  Clock,
+  Info,
+  MessageSquare,
   Plus,
+  Send,
   ShoppingCart,
+  ThumbsDown,
   ThumbsUp,
+  Trash2,
   Upload,
   X,
 } from 'lucide-react';
@@ -32,7 +38,7 @@ interface CommunityFeedViewProps {
   currentRole: UserRole;
   onOpenSignIn: () => void;
   onClearCommunityUnread: () => void;
-  onToggleVote: (suggestionId: string) => void;
+  onToggleVote: (suggestionId: string, direction?: 'up' | 'down') => void;
   onCreateSuggestion: (title: string, category: string, reason: string) => void;
   onCreateListing: (payload: {
     title: string;
@@ -47,11 +53,23 @@ interface CommunityFeedViewProps {
     listingId: string,
     paymentMethod: PaymentMethod.Cash | PaymentMethod.Debt,
     fulfillment: FulfillmentType,
-    quantity?: number
+    quantity?: number,
+    buyerLocation?: {
+      buyerDepartment?: string;
+      buyerTableRow?: string;
+      buyerTableNumber?: string;
+    }
   ) => void;
   onOpenSellerDashboard?: () => void;
   sellerCollectablesTotal?: number;
+  totalRegisteredUsers?: number;
   openSellFormSignal?: number;
+  onDeleteSuggestion?: (suggestionId: string) => Promise<void>;
+  onAddSuggestionComment?: (suggestionId: string, text: string) => void;
+  onUpdateSuggestionStatus?: (
+    suggestionId: string,
+    status: SuggestionItem['status']
+  ) => void;
 }
 
 export const CommunityFeedView: React.FC<CommunityFeedViewProps> = ({
@@ -70,7 +88,11 @@ export const CommunityFeedView: React.FC<CommunityFeedViewProps> = ({
   onBuyListing,
   onOpenSellerDashboard,
   sellerCollectablesTotal = 0,
+  totalRegisteredUsers = 0,
   openSellFormSignal = 0,
+  onDeleteSuggestion,
+  onAddSuggestionComment,
+  onUpdateSuggestionStatus,
 }) => {
   const [activeTab, setActiveTab] = useState<'marketplace' | 'suggestions'>('marketplace');
   const [showSuggestForm, setShowSuggestForm] = useState(false);
@@ -81,7 +103,34 @@ export const CommunityFeedView: React.FC<CommunityFeedViewProps> = ({
   );
   const [buyFulfillment, setBuyFulfillment] = useState<FulfillmentType>(FulfillmentType.Pickup);
   const [buyQuantity, setBuyQuantity] = useState(1);
+  const [buyerDepartment, setBuyerDepartment] = useState('');
+  const [buyerTableRow, setBuyerTableRow] = useState('');
+  const [buyerTableNumber, setBuyerTableNumber] = useState('');
+  const [buyError, setBuyError] = useState('');
   const [feedbackBanner, setFeedbackBanner] = useState('');
+  const [sugError, setSugError] = useState('');
+  const [confirmDeleteSugId, setConfirmDeleteSugId] = useState<string | null>(null);
+  const [deletingSugId, setDeletingSugId] = useState<string | null>(null);
+  const [expandedCommentsSugIds, setExpandedCommentsSugIds] = useState<Record<string, boolean>>({});
+  const [sugCommentDrafts, setSugCommentDrafts] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    const cleanDept =
+      currentUser?.department &&
+      currentUser.department !== 'Department Staff' &&
+      currentUser.department !== 'Unassigned'
+        ? currentUser.department
+        : '';
+    setBuyerDepartment(cleanDept);
+    setBuyerTableRow(currentUser?.tableRow || '');
+    setBuyerTableNumber(currentUser?.tableNumber || '');
+  }, [
+    currentUser?.id,
+    currentUser?.department,
+    currentUser?.tableRow,
+    currentUser?.tableNumber,
+    buyModalListing?.id,
+  ]);
 
   useEffect(() => {
     if (openSellFormSignal > 0) {
@@ -105,6 +154,8 @@ export const CommunityFeedView: React.FC<CommunityFeedViewProps> = ({
   const [sellImage, setSellImage] = useState('');
 
   const isGuest = currentRole === UserRole.Guest || !currentUser;
+  const isAdminOrSuper =
+    currentRole === UserRole.Admin || currentRole === UserRole.SuperAdmin;
   const approvedListings = listings.filter(
     (l) =>
       l.approvalStatus === 'approved' &&
@@ -177,7 +228,9 @@ export const CommunityFeedView: React.FC<CommunityFeedViewProps> = ({
     const canCash = listing.allowCash ?? true;
     const canDebt = listing.allowDebt ?? true;
     setBuyPayment(canCash ? PaymentMethod.Cash : canDebt ? PaymentMethod.Debt : PaymentMethod.Cash);
+    setBuyFulfillment(FulfillmentType.Pickup);
     setBuyQuantity(1);
+    setBuyError('');
     setBuyModalListing(listing);
   };
 
@@ -193,12 +246,24 @@ export const CommunityFeedView: React.FC<CommunityFeedViewProps> = ({
     if (buyPayment === PaymentMethod.Cash && !canCash) return;
     if (buyPayment === PaymentMethod.Debt && !canDebt) return;
 
+    const cleanDept = buyerDepartment.trim();
+    const cleanRow = buyerTableRow.trim();
+    const cleanTable = buyerTableNumber.trim();
+    if (!cleanDept || !cleanRow || !cleanTable) {
+      setBuyError('Please enter your Department Name, Table Row, and Table Number.');
+      return;
+    }
+
     const safeQty = Math.max(1, Math.min(buyModalListing.stock, Math.round(buyQuantity || 1)));
-    onBuyListing(buyModalListing.id, buyPayment, buyFulfillment, safeQty);
+    onBuyListing(buyModalListing.id, buyPayment, buyFulfillment, safeQty, {
+      buyerDepartment: cleanDept,
+      buyerTableRow: cleanRow,
+      buyerTableNumber: cleanTable,
+    });
     setFeedbackBanner(
       `Order submitted for ${safeQty}× "${buyModalListing.title}" via ${
         buyPayment === PaymentMethod.Debt ? 'Debt' : 'Cash'
-      }. Waiting for ${buyModalListing.sellerName} to confirm before it updates your ledger.`
+      } (${buyFulfillment}). Waiting for ${buyModalListing.sellerName} to confirm before stock updates or your ledger debt is recorded.`
     );
     setBuyModalListing(null);
     setTimeout(() => setFeedbackBanner(''), 6000);
@@ -671,52 +736,303 @@ export const CommunityFeedView: React.FC<CommunityFeedViewProps> = ({
             </form>
           )}
 
-          <div className="divide-y divide-stone-200 dark:divide-stone-800 rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] overflow-hidden">
-            {[...suggestions]
-              .sort((a, b) => b.voterIds.length - a.voterIds.length)
-              .map((sug) => {
-                const hasVoted = currentUser ? sug.voterIds.includes(currentUser.id) : false;
-                return (
-                  <div
-                    key={sug.id}
-                    className="p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
-                  >
-                    <div className="space-y-1 min-w-0">
-                      <div className="text-xs text-stone-500 dark:text-stone-400">
-                        {sug.category} · Requested by {sug.requestedByName} · {sug.createdAt} ·{' '}
-                        <span className="font-semibold text-stone-700 dark:text-stone-200">
-                          {sug.status}
-                        </span>
-                      </div>
-                      <h3 className="text-base font-bold text-stone-900 dark:text-stone-100">
-                        {sug.title}
-                      </h3>
-                      <p className="text-sm text-stone-600 dark:text-stone-400">{sug.reason}</p>
-                      <p className="text-xs text-stone-500 dark:text-stone-400 pt-1">
-                        Voters:{' '}
-                        {sug.voterNames.length > 0
-                          ? sug.voterNames.join(', ')
-                          : 'Be the first to vote'}
-                      </p>
-                    </div>
+          {sugError && (
+            <div className="rounded-xl border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950/40 px-4 py-3 text-xs text-red-700 dark:text-red-300 flex items-center justify-between gap-2">
+              <span>{sugError}</span>
+              <button
+                type="button"
+                onClick={() => setSugError('')}
+                className="text-red-700 dark:text-red-300 font-semibold hover:underline cursor-pointer"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
 
-                    <button
-                      type="button"
-                      onClick={() => (isGuest ? onOpenSignIn() : onToggleVote(sug.id))}
-                      className={`min-h-[44px] px-4 py-2 rounded-xl border inline-flex items-center gap-2 text-xs font-semibold whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
-                        hasVoted
-                          ? 'border-teal-700 bg-teal-50 dark:bg-teal-950/60 text-teal-800 dark:text-teal-200'
-                          : 'border-stone-200 dark:border-stone-700 bg-white dark:bg-[#172523] text-stone-700 dark:text-stone-200 hover:bg-stone-50 dark:hover:bg-[#1F312E]'
-                      }`}
-                    >
-                      <ThumbsUp className="w-4 h-4" />
-                      <span className="tabular-nums">
-                        {hasVoted ? 'Voted' : 'Upvote'} ({sug.voterIds.length})
-                      </span>
-                    </button>
-                  </div>
-                );
-              })}
+          <div className="divide-y divide-stone-200 dark:divide-stone-800 rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] overflow-hidden">
+            {suggestions.length === 0 ? (
+              <div className="p-8 text-center text-sm text-stone-500 dark:text-stone-400">
+                No pantry suggestions yet. Be the first to request an item!
+              </div>
+            ) : (
+              [...suggestions]
+                .sort((a, b) => {
+                  const aNet = a.voterIds.length - (a.downvoterIds?.length ?? 0);
+                  const bNet = b.voterIds.length - (b.downvoterIds?.length ?? 0);
+                  if (bNet !== aNet) return bNet - aNet;
+                  return b.voterIds.length - a.voterIds.length;
+                })
+                .map((sug) => {
+                  const hasUpvoted = currentUser ? sug.voterIds.includes(currentUser.id) : false;
+                  const downvoterIds = sug.downvoterIds ?? [];
+                  const downvoterNames = sug.downvoterNames ?? [];
+                  const hasDownvoted = currentUser ? downvoterIds.includes(currentUser.id) : false;
+                  const totalUsersCount = Math.max(
+                    totalRegisteredUsers,
+                    sug.voterIds.length + downvoterIds.length
+                  );
+                  const canRemove = Boolean(
+                    !isGuest &&
+                      currentUser &&
+                      (sug.requestedById === currentUser.id || isAdminOrSuper)
+                  );
+                  const comments = sug.comments ?? [];
+                  const commentsExpanded = Boolean(expandedCommentsSugIds[sug.id]);
+                  const draft = sugCommentDrafts[sug.id] ?? '';
+
+                  return (
+                    <div key={sug.id} className="p-5 space-y-3">
+                      <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
+                        <div className="space-y-1.5 min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-2 text-xs text-stone-500 dark:text-stone-400">
+                            <span>
+                              {sug.category} · Requested by {sug.requestedByName} · {sug.createdAt}
+                            </span>
+                            {sug.status === 'Added to Pantry' ? (
+                              <span className="inline-flex items-center gap-1 rounded-md bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 px-2 py-0.5 text-[11px] font-semibold text-emerald-700 dark:text-emerald-300">
+                                <CheckCircle2 className="w-3 h-3 shrink-0" />
+                                <span>
+                                  Added to Pantry
+                                  {sug.addedToStoreAt ? ` · ${sug.addedToStoreAt}` : ''}
+                                </span>
+                              </span>
+                            ) : sug.status === 'Reviewing' ? (
+                              <span className="inline-flex items-center gap-1 rounded-md bg-amber-50 dark:bg-amber-950/60 border border-amber-200 dark:border-amber-800 px-2 py-0.5 text-[11px] font-semibold text-amber-800 dark:text-amber-300">
+                                <Clock className="w-3 h-3 shrink-0" />
+                                <span>Reviewing</span>
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center rounded-md bg-stone-100 dark:bg-[#172523] border border-stone-200 dark:border-stone-700 px-2 py-0.5 text-[11px] font-semibold text-stone-700 dark:text-stone-300">
+                                Open for Votes
+                              </span>
+                            )}
+                          </div>
+
+                          <h3 className="text-base font-bold text-stone-900 dark:text-stone-100">
+                            {sug.title}
+                          </h3>
+                          <p className="text-sm text-stone-600 dark:text-stone-400">{sug.reason}</p>
+                          <div className="pt-2 mt-1 grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs border-t border-stone-100 dark:border-stone-800/80">
+                            <div>
+                              <span className="font-semibold text-stone-700 dark:text-stone-300 tabular-nums">
+                                Registered Users: {totalUsersCount}
+                              </span>
+                              <p className="text-[11px] text-stone-500 dark:text-stone-400 tabular-nums">
+                                Total Voted: {sug.voterIds.length + downvoterIds.length} / {totalUsersCount}
+                              </p>
+                            </div>
+                            <div>
+                              <span className="font-semibold text-teal-700 dark:text-teal-400 tabular-nums">
+                                Upvoted ({sug.voterIds.length}):
+                              </span>
+                              <p className="text-stone-600 dark:text-stone-400 break-words">
+                                {sug.voterNames.length > 0 ? sug.voterNames.join(', ') : 'None yet'}
+                              </p>
+                            </div>
+                            <div>
+                              <span className="font-semibold text-rose-700 dark:text-rose-400 tabular-nums">
+                                Downvoted ({downvoterIds.length}):
+                              </span>
+                              <p className="text-stone-600 dark:text-stone-400 break-words">
+                                {downvoterNames.length > 0 ? downvoterNames.join(', ') : 'None yet'}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2 shrink-0">
+                          {isAdminOrSuper && onUpdateSuggestionStatus && (
+                            <select
+                              aria-label={`Status for ${sug.title}`}
+                              value={sug.status}
+                              onChange={(e) =>
+                                onUpdateSuggestionStatus(
+                                  sug.id,
+                                  e.target.value as SuggestionItem['status']
+                                )
+                              }
+                              className="min-h-[40px] rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-[#172523] px-2.5 py-1.5 text-xs font-semibold text-stone-700 dark:text-stone-200 focus:border-teal-700 focus:outline-none cursor-pointer"
+                            >
+                              <option value="Open for Votes">Open for Votes</option>
+                              <option value="Reviewing">Reviewing</option>
+                              <option value="Added to Pantry">Added to Pantry</option>
+                            </select>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setExpandedCommentsSugIds((prev) => ({
+                                ...prev,
+                                [sug.id]: !prev[sug.id],
+                              }))
+                            }
+                            className="min-h-[40px] px-3 py-2 rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-[#172523] text-xs font-semibold text-stone-700 dark:text-stone-200 hover:bg-stone-50 dark:hover:bg-[#1F312E] inline-flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
+                          >
+                            <MessageSquare className="w-3.5 h-3.5" />
+                            <span className="tabular-nums">Comments ({comments.length})</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => (isGuest ? onOpenSignIn() : onToggleVote(sug.id, 'up'))}
+                            className={`min-h-[40px] px-3.5 py-2 rounded-xl border inline-flex items-center gap-1.5 text-xs font-semibold whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+                              hasUpvoted
+                                ? 'border-teal-700 bg-teal-50 dark:bg-teal-950/60 text-teal-800 dark:text-teal-200'
+                                : 'border-stone-200 dark:border-stone-700 bg-white dark:bg-[#172523] text-stone-700 dark:text-stone-200 hover:bg-stone-50 dark:hover:bg-[#1F312E]'
+                            }`}
+                          >
+                            <ThumbsUp className="w-3.5 h-3.5" />
+                            <span className="tabular-nums">
+                              {hasUpvoted ? 'Upvoted' : 'Upvote'} ({sug.voterIds.length})
+                            </span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => (isGuest ? onOpenSignIn() : onToggleVote(sug.id, 'down'))}
+                            className={`min-h-[40px] px-3.5 py-2 rounded-xl border inline-flex items-center gap-1.5 text-xs font-semibold whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+                              hasDownvoted
+                                ? 'border-rose-700 bg-rose-50 dark:bg-rose-950/60 text-rose-800 dark:text-rose-200'
+                                : 'border-stone-200 dark:border-stone-700 bg-white dark:bg-[#172523] text-stone-700 dark:text-stone-200 hover:bg-stone-50 dark:hover:bg-[#1F312E]'
+                            }`}
+                          >
+                            <ThumbsDown className="w-3.5 h-3.5" />
+                            <span className="tabular-nums">
+                              {hasDownvoted ? 'Downvoted' : 'Downvote'} ({downvoterIds.length})
+                            </span>
+                          </button>
+
+                          {canRemove && onDeleteSuggestion && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSugError('');
+                                setConfirmDeleteSugId((prev) => (prev === sug.id ? null : sug.id));
+                              }}
+                              aria-label={`Remove suggestion ${sug.title}`}
+                              title="Remove post"
+                              className="min-h-[40px] px-2.5 py-2 rounded-xl border border-stone-200 dark:border-stone-700 text-stone-500 hover:text-red-600 dark:hover:text-red-400 hover:border-red-300 dark:hover:border-red-800 transition-colors cursor-pointer"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {confirmDeleteSugId === sug.id && onDeleteSuggestion && (
+                        <div className="rounded-xl border border-red-200 dark:border-red-800 bg-red-50/70 dark:bg-red-950/40 px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs">
+                          <span className="font-medium text-red-900 dark:text-red-200">
+                            Remove this suggestion post from the feed?
+                          </span>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteSugId(null)}
+                              className="px-3 py-1 rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-[#172523] font-semibold text-stone-700 dark:text-stone-200 cursor-pointer"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              disabled={deletingSugId === sug.id}
+                              onClick={() => {
+                                setDeletingSugId(sug.id);
+                                setSugError('');
+                                void onDeleteSuggestion(sug.id)
+                                  .then(() => {
+                                    setConfirmDeleteSugId(null);
+                                  })
+                                  .catch((err) => {
+                                    setSugError(
+                                      err instanceof Error
+                                        ? err.message
+                                        : 'Failed to remove suggestion post.'
+                                    );
+                                  })
+                                  .finally(() => setDeletingSugId(null));
+                              }}
+                              className="px-3 py-1 rounded-lg bg-red-600 text-white font-semibold hover:bg-red-700 disabled:opacity-50 cursor-pointer"
+                            >
+                              {deletingSugId === sug.id ? 'Removing...' : 'Confirm Remove'}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {commentsExpanded && (
+                        <div className="rounded-xl border border-stone-200 dark:border-stone-800 bg-stone-50/70 dark:bg-[#0F1917] p-3.5 space-y-3">
+                          {comments.length === 0 ? (
+                            <p className="text-xs text-stone-500 dark:text-stone-400">
+                              No comments yet. Share feedback or flavor preferences below.
+                            </p>
+                          ) : (
+                            <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                              {comments.map((c) => (
+                                <div
+                                  key={c.id}
+                                  className="rounded-lg border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] px-3 py-2 text-xs space-y-0.5"
+                                >
+                                  <div className="flex items-center justify-between gap-2">
+                                    <span className="font-semibold text-stone-900 dark:text-stone-100">
+                                      {c.userName}
+                                      {c.userDepartment ? ` · ${c.userDepartment}` : ''}
+                                    </span>
+                                    <span className="text-[11px] text-stone-400">{c.createdAt}</span>
+                                  </div>
+                                  <p className="text-stone-700 dark:text-stone-300">{c.text}</p>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {onAddSuggestionComment && (
+                            <form
+                              onSubmit={(e) => {
+                                e.preventDefault();
+                                if (isGuest) {
+                                  onOpenSignIn();
+                                  return;
+                                }
+                                const clean = draft.trim();
+                                if (!clean) return;
+                                onAddSuggestionComment(sug.id, clean);
+                                setSugCommentDrafts((prev) => ({ ...prev, [sug.id]: '' }));
+                              }}
+                              className="flex items-center gap-2"
+                            >
+                              <input
+                                type="text"
+                                value={draft}
+                                onChange={(e) =>
+                                  setSugCommentDrafts((prev) => ({
+                                    ...prev,
+                                    [sug.id]: e.target.value,
+                                  }))
+                                }
+                                placeholder={
+                                  isGuest
+                                    ? 'Sign in to add a comment...'
+                                    : 'Add a comment on this suggestion...'
+                                }
+                                className="flex-1 min-h-[38px] rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-[#172523] px-3 py-1.5 text-xs text-stone-900 dark:text-stone-100 focus:border-teal-700 focus:outline-none"
+                              />
+                              <button
+                                type="submit"
+                                disabled={!isGuest && !draft.trim()}
+                                className="min-h-[38px] px-3.5 py-1.5 rounded-xl bg-teal-700 text-xs font-semibold text-white hover:bg-teal-800 disabled:bg-stone-200 dark:disabled:bg-stone-800 disabled:text-stone-500 inline-flex items-center gap-1 cursor-pointer"
+                              >
+                                <Send className="w-3.5 h-3.5" />
+                                <span>{isGuest ? 'Sign in' : 'Post'}</span>
+                              </button>
+                            </form>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+            )}
           </div>
         </div>
       )}
@@ -764,7 +1080,7 @@ export const CommunityFeedView: React.FC<CommunityFeedViewProps> = ({
               <label className="block text-xs font-semibold text-stone-700 dark:text-stone-300 mb-2">
                 Quantity ({buyModalListing.stock} available)
               </label>
-              <div className="flex items-center justify-between rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-[#172523] px-3 py-1.5">
+              <div className="flex items-center justify-between gap-2 rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-[#172523] px-3 py-1.5">
                 <button
                   type="button"
                   disabled={buyQuantity <= 1}
@@ -773,9 +1089,27 @@ export const CommunityFeedView: React.FC<CommunityFeedViewProps> = ({
                 >
                   −
                 </button>
-                <span className="font-mono text-sm font-bold tabular-nums text-stone-900 dark:text-stone-100">
-                  {buyQuantity} {buyQuantity === 1 ? 'unit' : 'units'} · {formatPHP(buyModalListing.price * buyQuantity)}
-                </span>
+                <div className="flex items-center gap-2 min-w-0">
+                  <input
+                    type="number"
+                    min={1}
+                    max={buyModalListing.stock}
+                    aria-label="Purchase quantity"
+                    value={buyQuantity}
+                    onChange={(e) => {
+                      const raw = Number(e.target.value);
+                      if (Number.isNaN(raw)) return;
+                      setBuyQuantity(
+                        Math.max(1, Math.min(buyModalListing.stock, Math.round(raw)))
+                      );
+                    }}
+                    className="w-16 min-h-[34px] rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-[#121D1B] px-2 text-center font-mono text-sm font-bold tabular-nums text-stone-900 dark:text-stone-100 focus:border-teal-700 focus:outline-none"
+                  />
+                  <span className="font-mono text-xs sm:text-sm font-bold tabular-nums text-stone-700 dark:text-stone-200 whitespace-nowrap">
+                    {formatPHP(buyModalListing.price)} × {buyQuantity} ={' '}
+                    {formatPHP(buyModalListing.price * buyQuantity)}
+                  </span>
+                </div>
                 <button
                   type="button"
                   disabled={buyQuantity >= buyModalListing.stock}
@@ -789,7 +1123,7 @@ export const CommunityFeedView: React.FC<CommunityFeedViewProps> = ({
 
             <div>
               <label className="block text-xs font-semibold text-stone-700 dark:text-stone-300 mb-2">
-                Pickup or Desk Delivery
+                Pickup or Seller Desk Delivery
               </label>
               <div className="grid grid-cols-2 gap-2">
                 {[FulfillmentType.Pickup, FulfillmentType.Delivery].map((f) => (
@@ -797,15 +1131,58 @@ export const CommunityFeedView: React.FC<CommunityFeedViewProps> = ({
                     key={f}
                     type="button"
                     onClick={() => setBuyFulfillment(f)}
-                    className={`min-h-[40px] rounded-xl border text-xs font-semibold cursor-pointer ${
+                    className={`min-h-[40px] rounded-xl border text-xs font-semibold transition-colors cursor-pointer ${
                       buyFulfillment === f
                         ? 'border-teal-700 bg-teal-50 dark:bg-teal-950/60 text-teal-800 dark:text-teal-200'
                         : 'border-stone-200 dark:border-stone-700 text-stone-600 dark:text-stone-300'
                     }`}
                   >
-                    {f}
+                    {f === FulfillmentType.Delivery ? 'Delivery (By Seller)' : 'Pick Up'}
                   </button>
                 ))}
+              </div>
+              <p className="mt-1.5 text-[11px] text-stone-500 dark:text-stone-400">
+                Community sellers deliver their own items independently (not via Store runners).
+              </p>
+            </div>
+
+            <div className="rounded-xl border border-stone-200 dark:border-stone-800 bg-stone-50 dark:bg-[#172523] p-3 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-semibold text-stone-700 dark:text-stone-200">
+                  Purchaser Department &amp; Desk
+                </span>
+                <span className="text-[11px] text-teal-700 dark:text-teal-400 font-medium">
+                  Auto-filled
+                </span>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <input
+                  type="text"
+                  maxLength={120}
+                  value={buyerDepartment}
+                  onChange={(e) => setBuyerDepartment(e.target.value)}
+                  placeholder="Department Name"
+                  aria-label="Purchaser Department Name"
+                  className="col-span-3 min-h-[36px] rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-[#121D1B] px-3 py-1.5 text-xs text-stone-900 dark:text-stone-100 focus:border-teal-700 focus:outline-none"
+                />
+                <input
+                  type="text"
+                  maxLength={40}
+                  value={buyerTableRow}
+                  onChange={(e) => setBuyerTableRow(e.target.value)}
+                  placeholder="Table Row"
+                  aria-label="Table Row"
+                  className="col-span-1 min-h-[36px] rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-[#121D1B] px-3 py-1.5 text-xs text-stone-900 dark:text-stone-100 focus:border-teal-700 focus:outline-none"
+                />
+                <input
+                  type="text"
+                  maxLength={40}
+                  value={buyerTableNumber}
+                  onChange={(e) => setBuyerTableNumber(e.target.value)}
+                  placeholder="Table Number"
+                  aria-label="Table Number"
+                  className="col-span-2 min-h-[36px] rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-[#121D1B] px-3 py-1.5 text-xs text-stone-900 dark:text-stone-100 focus:border-teal-700 focus:outline-none"
+                />
               </div>
             </div>
 
@@ -837,6 +1214,20 @@ export const CommunityFeedView: React.FC<CommunityFeedViewProps> = ({
                   );
                 })}
               </div>
+            </div>
+
+            {buyError && (
+              <p className="text-xs font-medium text-red-600 dark:text-red-400">
+                {buyError}
+              </p>
+            )}
+
+            <div className="rounded-xl border border-teal-200 dark:border-teal-800/70 bg-teal-50/70 dark:bg-teal-950/35 px-3 py-2.5 flex items-start gap-2 text-xs text-teal-900 dark:text-teal-200">
+              <Info className="w-4 h-4 text-teal-700 dark:text-teal-400 shrink-0 mt-0.5" />
+              <span>
+                <strong>Seller Confirmation Required:</strong> Placing an order keeps it pending until{' '}
+                {buyModalListing.sellerName} confirms—stock only deducts and Buyer Ledger debt only appears after seller approval.
+              </span>
             </div>
 
             <div className="flex justify-end gap-2 pt-2">

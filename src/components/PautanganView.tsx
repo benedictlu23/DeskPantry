@@ -9,7 +9,6 @@ import {
   Upload,
   X,
 } from 'lucide-react';
-import { SAMPLE_RECEIPT_DATA_URL } from '../data/seedData';
 import {
   LoanRecord,
   PautanganSettings,
@@ -18,7 +17,8 @@ import {
   UserRole,
 } from '../types';
 import { formatPHP } from '../utils/format';
-import { compressImageFileToDataUrl } from '../utils/image';
+import { compressImageFileToDataUrl, isValidUploadedReceipt } from '../utils/image';
+import { ImagePreviewModal, ImagePreviewTarget } from './ImagePreviewModal';
 import { PaymentMethodCard } from './PaymentMethodCard';
 
 interface PautanganViewProps {
@@ -78,7 +78,9 @@ export const PautanganView: React.FC<PautanganViewProps> = ({
   );
   const [repayRef, setRepayRef] = useState('');
   const [repayProof, setRepayProof] = useState('');
+  const [repayError, setRepayError] = useState('');
   const [banner, setBanner] = useState('');
+  const [previewImage, setPreviewImage] = useState<ImagePreviewTarget | null>(null);
 
   const isGuest = currentRole === UserRole.Guest || !currentUser;
   const userLoans = currentUser ? loans.filter((l) => l.userId === currentUser.id) : [];
@@ -121,14 +123,37 @@ export const PautanganView: React.FC<PautanganViewProps> = ({
   const handleProofUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    void compressImageFileToDataUrl(file).then((compressed) => {
-      setRepayProof(compressed);
-    });
+    if (!file.type.startsWith('image/') || file.type === 'image/svg+xml') {
+      setRepayError('Please upload a valid receipt photo or screenshot (PNG, JPG, or WebP).');
+      return;
+    }
+    void compressImageFileToDataUrl(file)
+      .then((compressed) => {
+        if (!isValidUploadedReceipt(compressed)) {
+          setRepayError('Please upload a valid payment receipt image.');
+          return;
+        }
+        setRepayProof(compressed);
+        setRepayError('');
+      })
+      .catch(() => {
+        setRepayError('Could not process selected receipt image.');
+      });
   };
 
   const handleRepaySubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!repayModalLoan || !selectedRepayMethod) return;
+    if (selectedRepayMethod.type === 'digital') {
+      if (!repayRef.trim()) {
+        setRepayError(`Enter the ${selectedRepayMethod.title} reference number.`);
+        return;
+      }
+      if (!isValidUploadedReceipt(repayProof)) {
+        setRepayError(`Upload a valid ${selectedRepayMethod.title} payment receipt image.`);
+        return;
+      }
+    }
     const amt = Math.min(
       repayModalLoan.remainingBalance,
       Math.max(1, Number(repayAmount) || 0)
@@ -138,7 +163,7 @@ export const PautanganView: React.FC<PautanganViewProps> = ({
       amount: amt,
       method: selectedRepayMethod.title,
       referenceNo: repayRef.trim() || undefined,
-      proofImage: repayProof || undefined,
+      proofImage: selectedRepayMethod.type === 'digital' ? repayProof : undefined,
     });
     setBanner(
       selectedRepayMethod.type === 'cash'
@@ -148,6 +173,7 @@ export const PautanganView: React.FC<PautanganViewProps> = ({
     setRepayModalLoan(null);
     setRepayRef('');
     setRepayProof('');
+    setRepayError('');
     setTimeout(() => setBanner(''), 5000);
   };
 
@@ -596,44 +622,71 @@ export const PautanganView: React.FC<PautanganViewProps> = ({
                     className="w-full min-h-[40px] rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-[#111B19] px-3 py-2 text-xs font-mono text-stone-900 dark:text-stone-100 focus:border-teal-700 focus:outline-none"
                   />
                   <div className="flex flex-wrap items-center gap-2">
-                    <label className="min-h-[38px] inline-flex items-center gap-1.5 rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-[#111B19] px-3 py-1.5 text-xs font-semibold text-stone-700 dark:text-stone-200 cursor-pointer">
+                    <label className="min-h-[38px] inline-flex items-center gap-1.5 rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-[#111B19] px-3 py-1.5 text-xs font-semibold text-stone-700 dark:text-stone-200 hover:bg-stone-100 dark:hover:bg-stone-800 cursor-pointer">
                       <Upload className="w-3.5 h-3.5 text-teal-700 dark:text-teal-400" />
-                      <span>Upload Proof</span>
-                      <input type="file" accept="image/*" onChange={handleProofUpload} className="hidden" />
+                      <span>Upload Receipt Image</span>
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp,image/*"
+                        onChange={handleProofUpload}
+                        className="hidden"
+                      />
                     </label>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setRepayProof(SAMPLE_RECEIPT_DATA_URL);
-                        if (!repayRef) {
-                          setRepayRef(`${selectedRepayMethod.title.slice(0, 2).toUpperCase()}-5590123`);
-                        }
-                      }}
-                      className="min-h-[38px] rounded-lg border border-teal-200 dark:border-teal-800 bg-white dark:bg-[#111B19] px-3 py-1.5 text-xs font-medium text-teal-800 dark:text-teal-300 cursor-pointer"
-                    >
-                      Use Sample Receipt
-                    </button>
                   </div>
                   {repayProof && (
-                    <img
-                      src={repayProof}
-                      alt="Loan repayment proof preview"
-                      className="w-16 h-16 object-cover rounded-lg border border-stone-200 dark:border-stone-700"
-                    />
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setPreviewImage({
+                            src: repayProof,
+                            title: `${selectedRepayMethod.title} Loan Repayment Receipt`,
+                            subtitle: repayRef.trim() ? `Ref: ${repayRef.trim()}` : 'Uploaded receipt preview',
+                          })
+                        }
+                        className="rounded-lg overflow-hidden border border-stone-200 dark:border-stone-700 hover:opacity-90 transition-opacity cursor-pointer"
+                        title="Click to preview receipt image"
+                        aria-label="Preview uploaded repayment receipt"
+                      >
+                        <img
+                          src={repayProof}
+                          alt="Loan repayment proof preview"
+                          className="w-16 h-16 object-cover"
+                        />
+                      </button>
+                      <span className="text-xs text-stone-500 dark:text-stone-400">
+                        Click thumbnail to preview
+                      </span>
+                    </div>
                   )}
                 </div>
               </div>
             )}
 
+            {repayError && (
+              <p className="text-xs font-medium text-red-600 dark:text-red-400">
+                {repayError}
+              </p>
+            )}
+
             <button
               type="submit"
-              className="w-full min-h-[44px] rounded-xl bg-teal-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-800 cursor-pointer"
+              disabled={
+                selectedRepayMethod?.type === 'digital' &&
+                (!repayRef.trim() || !isValidUploadedReceipt(repayProof))
+              }
+              className="w-full min-h-[44px] rounded-xl bg-teal-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-800 disabled:bg-stone-200 dark:disabled:bg-stone-800 disabled:text-stone-500 cursor-pointer"
             >
               Submit Repayment
             </button>
           </form>
         </div>
       )}
+
+      <ImagePreviewModal
+        preview={previewImage}
+        onClose={() => setPreviewImage(null)}
+      />
     </div>
   );
 };

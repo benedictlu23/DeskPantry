@@ -49,6 +49,7 @@ import { AdminRestockPanel } from './AdminRestockPanel';
 import { AdminSalesOrderPanel } from './AdminSalesOrderPanel';
 import { AdminStockAdjustmentPanel } from './AdminStockAdjustmentPanel';
 import { BarcodeScannerModal } from './BarcodeScannerModal';
+import { ImagePreviewModal, ImagePreviewTarget } from './ImagePreviewModal';
 import { PaymentMethodCard } from './PaymentMethodCard';
 
 interface AdminConsoleViewProps {
@@ -218,6 +219,7 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
   const [deliveryFee, setDeliveryFee] = useState(String(storeConfig.deliveryFee));
   const [banner, setBanner] = useState('');
   const [errorBanner, setErrorBanner] = useState('');
+  const [previewImage, setPreviewImage] = useState<ImagePreviewTarget | null>(null);
 
   useEffect(() => {
     setDay1Input(String(pautanganSettings.dueDays[0]));
@@ -1823,7 +1825,68 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
               )}
             </div>
           ) : (
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+            <div className="space-y-6">
+              {/* Super Admin Global Delivery Service Toggle */}
+              <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="flex items-start gap-3">
+                  <div
+                    className={`w-10 h-10 rounded-xl border flex items-center justify-center shrink-0 ${
+                      storeConfig.deliveryEnabled
+                        ? 'bg-emerald-50 dark:bg-emerald-950/60 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-400'
+                        : 'bg-stone-100 dark:bg-[#172523] border-stone-200 dark:border-stone-700 text-stone-500 dark:text-stone-400'
+                    }`}
+                  >
+                    <Truck className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h2 className="text-base font-bold text-stone-900 dark:text-stone-100">
+                        Desk Delivery Option (Storefront &amp; Walk-In Orders)
+                      </h2>
+                      <span
+                        className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
+                          storeConfig.deliveryEnabled
+                            ? 'bg-emerald-100 dark:bg-emerald-950/70 text-emerald-800 dark:text-emerald-300'
+                            : 'bg-stone-200 dark:bg-stone-800 text-stone-700 dark:text-stone-300'
+                        }`}
+                      >
+                        {storeConfig.deliveryEnabled ? 'Enabled' : 'Disabled (Pickup Only)'}
+                      </span>
+                    </div>
+                    <p className="text-xs text-stone-500 dark:text-stone-400 mt-1">
+                      Enable or disable Store Desk Delivery across Storefront checkout and Walk-In Sales Orders. Community Marketplace listings handle their own seller delivery independently.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const nextEnabled = !storeConfig.deliveryEnabled;
+                      setDeliveryEnabled(nextEnabled);
+                      onUpdateStoreConfig({
+                        ...storeConfig,
+                        deliveryEnabled: nextEnabled,
+                      });
+                      showToast(
+                        nextEnabled
+                          ? 'Desk Delivery enabled for Storefront & Walk-In Orders.'
+                          : 'Desk Delivery disabled — Storefront & Walk-In Orders set to Pickup Only.'
+                      );
+                    }}
+                    className={`min-h-[44px] px-5 py-2 rounded-xl text-xs font-bold transition-colors cursor-pointer ${
+                      storeConfig.deliveryEnabled
+                        ? 'border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300 hover:bg-red-100 dark:hover:bg-red-950/70'
+                        : 'bg-teal-700 text-white hover:bg-teal-800'
+                    }`}
+                  >
+                    {storeConfig.deliveryEnabled ? 'Disable Delivery' : 'Enable Delivery'}
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
               {/* Add Delivery Staff Form */}
               <form
                 onSubmit={(e) => {
@@ -1974,6 +2037,7 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                   </table>
                 </div>
               </div>
+              </div>
             </div>
           )}
         </div>
@@ -1999,11 +2063,31 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                   className="p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
                 >
                   <div className="flex items-start gap-4">
-                    <img
-                      src={prf.imageDataUrl}
-                      alt={`Receipt from ${prf.userName}`}
-                      className="w-20 h-24 rounded-xl object-cover border border-stone-200 dark:border-stone-700 shrink-0 bg-stone-50"
-                    />
+                    {prf.imageDataUrl ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setPreviewImage({
+                            src: prf.imageDataUrl,
+                            title: `${prf.userName} · ${prf.channel} Receipt`,
+                            subtitle: `${prf.purpose} · Ref: ${prf.referenceNo} · ${formatPHP(prf.amount, true)}`,
+                          })
+                        }
+                        className="rounded-xl overflow-hidden border border-stone-200 dark:border-stone-700 hover:opacity-90 transition-opacity shrink-0 bg-stone-50 cursor-pointer"
+                        title="Click to preview receipt image"
+                        aria-label={`Preview receipt from ${prf.userName}`}
+                      >
+                        <img
+                          src={prf.imageDataUrl}
+                          alt={`Receipt from ${prf.userName}`}
+                          className="w-20 h-24 object-cover"
+                        />
+                      </button>
+                    ) : (
+                      <div className="w-20 h-24 rounded-xl border border-dashed border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-[#172523] shrink-0 flex items-center justify-center text-[10px] font-semibold text-stone-400 text-center px-1.5">
+                        Media Cleared
+                      </div>
+                    )}
                     <div>
                       <div className="text-xs text-stone-500 dark:text-stone-400">
                         <span className="font-mono font-semibold text-stone-700 dark:text-stone-200">
@@ -2512,6 +2596,10 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
           setNewBarcode(code.slice(0, 64));
           setIsAddBarcodeScannerOpen(false);
         }}
+      />
+      <ImagePreviewModal
+        preview={previewImage}
+        onClose={() => setPreviewImage(null)}
       />
     </div>
   );

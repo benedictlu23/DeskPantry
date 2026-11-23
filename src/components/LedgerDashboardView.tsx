@@ -12,7 +12,6 @@ import {
   Wallet,
   X,
 } from 'lucide-react';
-import { SAMPLE_RECEIPT_DATA_URL } from '../data/seedData';
 import {
   FulfillmentType,
   LoanRecord,
@@ -32,7 +31,8 @@ import {
   isDateWithinPeriod,
   isOrderPendingSellerConfirmation,
 } from '../utils/format';
-import { compressImageFileToDataUrl } from '../utils/image';
+import { compressImageFileToDataUrl, isValidUploadedReceipt } from '../utils/image';
+import { ImagePreviewModal, ImagePreviewTarget } from './ImagePreviewModal';
 import { PaymentMethodCard } from './PaymentMethodCard';
 
 interface LedgerDashboardViewProps {
@@ -109,7 +109,9 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
   );
   const [payRef, setPayRef] = useState('');
   const [payImage, setPayImage] = useState('');
+  const [payError, setPayError] = useState('');
   const [banner, setBanner] = useState('');
+  const [previewImage, setPreviewImage] = useState<ImagePreviewTarget | null>(null);
 
   // Community Seller Pay Modal state
   const [payingSellerGroup, setPayingSellerGroup] = useState<SellerDebtGroup | null>(null);
@@ -254,16 +256,37 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    void compressImageFileToDataUrl(file).then((compressed) => {
-      setPayImage(compressed);
-    });
+    if (!file.type.startsWith('image/') || file.type === 'image/svg+xml') {
+      setPayError('Please upload a valid receipt photo or screenshot (PNG, JPG, or WebP).');
+      return;
+    }
+    void compressImageFileToDataUrl(file)
+      .then((compressed) => {
+        if (!isValidUploadedReceipt(compressed)) {
+          setPayError('Please upload a valid payment receipt image.');
+          return;
+        }
+        setPayImage(compressed);
+        setPayError('');
+      })
+      .catch(() => {
+        setPayError('Could not process selected receipt image.');
+      });
   };
 
   const handleSellerFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (!file.type.startsWith('image/') || file.type === 'image/svg+xml') {
+      setSellerPayError('Please upload a valid receipt photo or screenshot (PNG, JPG, or WebP).');
+      return;
+    }
     void compressImageFileToDataUrl(file)
       .then((compressed) => {
+        if (!isValidUploadedReceipt(compressed)) {
+          setSellerPayError('Please upload a valid payment receipt image.');
+          return;
+        }
         setSellerPayImage(compressed);
         setSellerPayError('');
       })
@@ -275,7 +298,14 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
   const handleProofSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const amt = Number(payAmount) || 0;
-    if (amt <= 0 || !payRef.trim() || !payImage || !selectedDigitalMethod) return;
+    if (amt <= 0 || !payRef.trim() || !selectedDigitalMethod) {
+      setPayError('Enter a valid amount and reference number.');
+      return;
+    }
+    if (!isValidUploadedReceipt(payImage)) {
+      setPayError('Please upload a valid payment receipt image.');
+      return;
+    }
     onSubmitDebtProof({
       amount: amt,
       channel: selectedDigitalMethod.title,
@@ -286,6 +316,7 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
     setPayAmount('');
     setPayRef('');
     setPayImage('');
+    setPayError('');
     setActiveTab('receipts');
     setBanner(
       `Store payment receipt sent! (${selectedDigitalMethod.title} · ${formatPHP(amt, true)}). Store Admin will verify and update your store debt balance.`
@@ -295,6 +326,7 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
 
   const openPayModalWithAmount = (amount: number) => {
     setPayAmount(String(Math.max(0, amount)));
+    setPayError('');
     setShowPayModal(true);
   };
 
@@ -318,8 +350,8 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
     e.preventDefault();
     if (!payingSellerGroup) return;
     const amt = Number(sellerPayAmount) || 0;
-    if (amt <= 0 || !sellerPayRef.trim() || !sellerPayImage) {
-      setSellerPayError('Enter payment amount, reference number, and upload your receipt image.');
+    if (amt <= 0 || !sellerPayRef.trim() || !isValidUploadedReceipt(sellerPayImage)) {
+      setSellerPayError('Enter payment amount, reference number, and upload a valid receipt image.');
       return;
     }
 
@@ -1004,11 +1036,31 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
                     className="p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
                   >
                     <div className="flex items-center gap-3.5 min-w-0">
-                      <img
-                        src={prf.imageDataUrl}
-                        alt={`Receipt ${prf.referenceNo}`}
-                        className="w-14 h-14 rounded-xl object-cover border border-stone-200 dark:border-stone-700 shrink-0"
-                      />
+                      {prf.imageDataUrl ? (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setPreviewImage({
+                              src: prf.imageDataUrl,
+                              title: `${prf.channel} Receipt — ${prf.purpose}`,
+                              subtitle: `Ref: ${prf.referenceNo} · ${prf.submittedAt}`,
+                            })
+                          }
+                          className="rounded-xl overflow-hidden border border-stone-200 dark:border-stone-700 hover:opacity-90 transition-opacity shrink-0 cursor-pointer"
+                          title="Click to preview receipt image"
+                          aria-label={`Preview receipt ${prf.referenceNo}`}
+                        >
+                          <img
+                            src={prf.imageDataUrl}
+                            alt={`Receipt ${prf.referenceNo}`}
+                            className="w-14 h-14 object-cover"
+                          />
+                        </button>
+                      ) : (
+                        <div className="w-14 h-14 rounded-xl border border-dashed border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-[#172523] shrink-0 flex items-center justify-center text-[10px] font-semibold text-stone-400 text-center px-1">
+                          Cleared
+                        </div>
+                      )}
                       <div className="min-w-0 space-y-0.5">
                         <div className="text-sm font-bold text-stone-900 dark:text-stone-100 truncate">
                           {prf.channel} — {prf.purpose}
@@ -1141,32 +1193,50 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
                 4. Upload Receipt Screenshot
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                <label className="min-h-[40px] inline-flex items-center gap-2 rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-[#172523] px-3 py-2 text-xs font-semibold text-stone-700 dark:text-stone-200 cursor-pointer">
+                <label className="min-h-[40px] inline-flex items-center gap-2 rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-[#172523] px-3 py-2 text-xs font-semibold text-stone-700 dark:text-stone-200 hover:bg-stone-100 dark:hover:bg-[#1E2E2B] cursor-pointer">
                   <Upload className="w-3.5 h-3.5 text-teal-700 dark:text-teal-400" />
-                  <span>Upload Screenshot</span>
-                  <input type="file" accept="image/*" onChange={handleFileUpload} className="hidden" />
+                  <span>Upload Receipt Image</span>
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp,image/*"
+                    onChange={handleFileUpload}
+                    className="hidden"
+                  />
                 </label>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPayImage(SAMPLE_RECEIPT_DATA_URL);
-                    if (!payRef && selectedDigitalMethod) {
-                      setPayRef(`${selectedDigitalMethod.title.slice(0, 2).toUpperCase()}-9021455`);
-                    }
-                  }}
-                  className="min-h-[40px] rounded-xl border border-teal-200 dark:border-teal-800 bg-teal-50/60 dark:bg-teal-950/40 px-3 py-2 text-xs font-medium text-teal-800 dark:text-teal-300 cursor-pointer"
-                >
-                  Use Sample Receipt
-                </button>
               </div>
               {payImage && (
-                <img
-                  src={payImage}
-                  alt="Proof preview"
-                  className="w-20 h-20 rounded-lg object-cover border border-stone-200 dark:border-stone-700"
-                />
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setPreviewImage({
+                        src: payImage,
+                        title: `${selectedDigitalMethod?.title ?? 'Store'} Payment Receipt`,
+                        subtitle: payRef.trim() ? `Ref: ${payRef.trim()}` : 'Uploaded receipt preview',
+                      })
+                    }
+                    className="rounded-lg overflow-hidden border border-stone-200 dark:border-stone-700 hover:opacity-90 transition-opacity cursor-pointer"
+                    title="Click to preview receipt image"
+                    aria-label="Preview uploaded payment receipt"
+                  >
+                    <img
+                      src={payImage}
+                      alt="Proof preview"
+                      className="w-20 h-20 object-cover"
+                    />
+                  </button>
+                  <span className="text-xs text-stone-500 dark:text-stone-400">
+                    Click thumbnail to preview
+                  </span>
+                </div>
               )}
             </div>
+
+            {payError && (
+              <p className="text-xs font-medium text-red-600 dark:text-red-400">
+                {payError}
+              </p>
+            )}
 
             <button
               type="submit"
@@ -1301,38 +1371,44 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
                 4. Upload Payment Screenshot / Proof
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                <label className="min-h-[40px] inline-flex items-center gap-2 rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-[#172523] px-3 py-2 text-xs font-semibold text-stone-700 dark:text-stone-200 cursor-pointer">
+                <label className="min-h-[40px] inline-flex items-center gap-2 rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-[#172523] px-3 py-2 text-xs font-semibold text-stone-700 dark:text-stone-200 hover:bg-stone-100 dark:hover:bg-[#1E2E2B] cursor-pointer">
                   <Upload className="w-3.5 h-3.5 text-teal-700 dark:text-teal-400" />
-                  <span>Upload Screenshot</span>
+                  <span>Upload Receipt Image</span>
                   <input
                     type="file"
-                    accept="image/*"
+                    accept="image/png,image/jpeg,image/webp,image/*"
                     onChange={handleSellerFileUpload}
                     className="hidden"
                   />
                 </label>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSellerPayImage(SAMPLE_RECEIPT_DATA_URL);
-                    if (!sellerPayRef) {
-                      setSellerPayRef(
-                        `${sellerPayChannel.slice(0, 2).toUpperCase()}-7731902`
-                      );
-                    }
-                    setSellerPayError('');
-                  }}
-                  className="min-h-[40px] rounded-xl border border-teal-200 dark:border-teal-800 bg-teal-50/60 dark:bg-teal-950/40 px-3 py-2 text-xs font-medium text-teal-800 dark:text-teal-300 cursor-pointer"
-                >
-                  Use Sample Receipt
-                </button>
               </div>
               {sellerPayImage && (
-                <img
-                  src={sellerPayImage}
-                  alt="Seller payment proof preview"
-                  className="w-20 h-20 rounded-lg object-cover border border-stone-200 dark:border-stone-700"
-                />
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setPreviewImage({
+                        src: sellerPayImage,
+                        title: `Payment Receipt for ${payingSellerGroup.sellerName}`,
+                        subtitle: sellerPayRef.trim()
+                          ? `${sellerPayChannel} · Ref: ${sellerPayRef.trim()}`
+                          : sellerPayChannel,
+                      })
+                    }
+                    className="rounded-lg overflow-hidden border border-stone-200 dark:border-stone-700 hover:opacity-90 transition-opacity cursor-pointer"
+                    title="Click to preview receipt image"
+                    aria-label="Preview uploaded seller payment receipt"
+                  >
+                    <img
+                      src={sellerPayImage}
+                      alt="Seller payment proof preview"
+                      className="w-20 h-20 object-cover"
+                    />
+                  </button>
+                  <span className="text-xs text-stone-500 dark:text-stone-400">
+                    Click thumbnail to preview
+                  </span>
+                </div>
               )}
             </div>
 
@@ -1359,6 +1435,11 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
           </form>
         </div>
       )}
+
+      <ImagePreviewModal
+        preview={previewImage}
+        onClose={() => setPreviewImage(null)}
+      />
     </div>
   );
 };

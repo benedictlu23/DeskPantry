@@ -11,6 +11,7 @@ import {
   HandCoins,
   LayoutDashboard,
   LogOut,
+  MapPin,
   Menu,
   MessageSquare,
   Moon,
@@ -19,6 +20,8 @@ import {
   ShoppingBag,
   Store,
   Sun,
+  Terminal,
+  Trash2,
   Truck,
   Users,
   X,
@@ -27,6 +30,10 @@ import { AdminConsoleView } from './components/AdminConsoleView';
 import { ChatHubView } from './components/ChatHubView';
 import { CommunityFeedView } from './components/CommunityFeedView';
 import { DeliveryStaffView } from './components/DeliveryStaffView';
+import {
+  DeveloperSettingsView,
+  MediaAssetEntry,
+} from './components/DeveloperSettingsView';
 import { EWalletExchangeView } from './components/EWalletExchangeView';
 import { GeminiChatbotDrawer } from './components/GeminiChatbotDrawer';
 import { LedgerDashboardView } from './components/LedgerDashboardView';
@@ -38,6 +45,7 @@ import { QRShareModal } from './components/QRShareModal';
 import { SellerDashboardView } from './components/SellerDashboardView';
 import { SignInModal } from './components/SignInModal';
 import { StorefrontView } from './components/StorefrontView';
+import { WorkstationSetupModal } from './components/WorkstationSetupModal';
 import {
   INITIAL_PAUTANGAN_SETTINGS,
   INITIAL_STORE_CONFIG,
@@ -47,7 +55,19 @@ import { auth } from './firebase';
 import {
   addChatMessageToThread,
   approveSellerProofAndSettleOrders,
+  clearInternalAppImage,
+  clearMarketplaceListingImage,
+  clearPaymentProofImage,
+  clearStoreItemImage,
+  createChatThread,
   createNotificationDoc,
+  deleteChatMessage,
+  deleteChatThread,
+  deleteEWalletPost,
+  deleteInternalApp,
+  deleteNotificationDoc,
+  deleteNotificationDocs,
+  deleteSuggestionDoc,
   getSellerConfigById,
   markMarketplaceOrderDebtSettled,
   markNotificationReadDoc,
@@ -56,6 +76,7 @@ import {
   removeMarketplaceListing,
   removeStoreItem,
   saveEWalletPost,
+  saveInternalApp,
   saveLoanRecord,
   saveMarketplaceListing,
   saveOrder,
@@ -78,8 +99,11 @@ import {
   updateOrderDeliveryFields,
   updateSellerListingConfig,
   updateStoreItemStock,
+  updateSuggestionComments,
+  updateSuggestionStatus,
   updateSuggestionVotes,
   updateUserCheckoutTotals,
+  updateUserWorkstationProfile,
   upsertUserOnAuth,
 } from './services/firestoreSync';
 import {
@@ -87,6 +111,7 @@ import {
   CartItem,
   ChatThread,
   CommissionType,
+  CoworkerProfile,
   EWalletPost,
   FulfillmentType,
   InternalApp,
@@ -101,6 +126,7 @@ import {
   StoreConfig,
   StoreItem,
   StoreOrder,
+  SuggestionComment,
   SuggestionItem,
   UserAccount,
   UserRole,
@@ -108,6 +134,7 @@ import {
 import {
   buildLoanInstallments,
   computeCommission,
+  formatBuyerWorkstation,
   formatPHP,
   getNextDueDateLabel,
   getOrderItemsSubtotal,
@@ -137,6 +164,7 @@ export default function App() {
   const [avatarFailed, setAvatarFailed] = useState(false);
 
   const [users, setUsers] = useState<UserAccount[]>([]);
+  const [coworkerProfiles, setCoworkerProfiles] = useState<CoworkerProfile[]>([]);
   const [items, setItems] = useState<StoreItem[]>([]);
   const [isStoreLoading, setIsStoreLoading] = useState<boolean>(true);
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -154,6 +182,7 @@ export default function App() {
   const [threads, setThreads] = useState<ChatThread[]>([]);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [localReadNotifIds, setLocalReadNotifIds] = useState<Record<string, boolean>>({});
+  const [dismissedNotifIds, setDismissedNotifIds] = useState<Record<string, boolean>>({});
   const [otherApps, setOtherApps] = useState<InternalApp[]>([]);
   const [sellerConfig, setSellerConfig] = useState<SellerConfig | null>(null);
   const [openCommunitySellSignal, setOpenCommunitySellSignal] = useState(0);
@@ -163,6 +192,10 @@ export default function App() {
   );
 
   const [activeSection, setActiveSection] = useState<ActiveSection>('store');
+  const [requestedChatThreadId, setRequestedChatThreadId] = useState<{
+    threadId: string;
+    nonce: number;
+  } | null>(null);
   const [requestedAdminSubTab, setRequestedAdminSubTab] = useState<{
     tab:
       | 'items'
@@ -183,11 +216,43 @@ export default function App() {
   const [isNotifOpen, setIsNotifOpen] = useState(false);
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const [isMobileDrawerOpen, setIsMobileDrawerOpen] = useState(false);
+  const [isWorkstationModalOpen, setIsWorkstationModalOpen] = useState(false);
+  const [isWorkstationFirstTime, setIsWorkstationFirstTime] = useState(false);
+  const promptedWorkstationUidRef = useRef<string | null>(null);
 
   const dueDaysRef = useRef<[number, number]>(pautanganSettings.dueDays);
   useEffect(() => {
     dueDaysRef.current = pautanganSettings.dueDays;
   }, [pautanganSettings.dueDays]);
+
+  // Prompt newly signed-in users once to enter Department Name, Table Row & Table Number
+  useEffect(() => {
+    if (!authReady) return;
+    if (!authUser || authUser.role === UserRole.Guest) {
+      promptedWorkstationUidRef.current = null;
+      setIsWorkstationModalOpen(false);
+      return;
+    }
+    const needsWorkstation =
+      !authUser.department?.trim() ||
+      authUser.department === 'Department Staff' ||
+      authUser.department === 'Unassigned' ||
+      !authUser.tableRow?.trim() ||
+      !authUser.tableNumber?.trim();
+
+    if (needsWorkstation && promptedWorkstationUidRef.current !== authUser.id) {
+      promptedWorkstationUidRef.current = authUser.id;
+      setIsWorkstationFirstTime(true);
+      setIsWorkstationModalOpen(true);
+    }
+  }, [
+    authReady,
+    authUser?.id,
+    authUser?.role,
+    authUser?.department,
+    authUser?.tableRow,
+    authUser?.tableNumber,
+  ]);
 
   // Sync dark mode class on <html>
   useEffect(() => {
@@ -203,10 +268,11 @@ export default function App() {
     setAvatarFailed(false);
   }, [authUser?.avatarUrl]);
 
-  // Restore per-user read state for broadcast/role notifications
+  // Restore per-user read & dismissed state for notifications
   useEffect(() => {
     if (!authUser?.id) {
       setLocalReadNotifIds({});
+      setDismissedNotifIds({});
       return;
     }
     try {
@@ -214,6 +280,16 @@ export default function App() {
       setLocalReadNotifIds(saved ? (JSON.parse(saved) as Record<string, boolean>) : {});
     } catch {
       setLocalReadNotifIds({});
+    }
+    try {
+      const savedDismissed = window.localStorage.getItem(
+        `deskpantry_dismissed_notifs_${authUser.id}`
+      );
+      setDismissedNotifIds(
+        savedDismissed ? (JSON.parse(savedDismissed) as Record<string, boolean>) : {}
+      );
+    } catch {
+      setDismissedNotifIds({});
     }
   }, [authUser?.id]);
 
@@ -249,6 +325,7 @@ export default function App() {
         setAuthReady(true);
         setPreviewRole(null);
         setUsers([]);
+        setCoworkerProfiles([]);
         setCart([]);
         setOrders([]);
         setProofs([]);
@@ -261,6 +338,7 @@ export default function App() {
         setNotifications([]);
         setSellerConfig(null);
         setLocalReadNotifIds({});
+        setDismissedNotifIds({});
         return;
       }
 
@@ -310,8 +388,8 @@ export default function App() {
         onUsers: (allUsers) => {
           setUsers(allUsers);
         },
-        onCoworkerProfiles: () => {
-          // Available for coworker directory enrichment if needed
+        onCoworkerProfiles: (profiles) => {
+          setCoworkerProfiles(profiles);
         },
         onOrders: (nextOrders) => {
           setOrders(nextOrders);
@@ -380,13 +458,44 @@ export default function App() {
       (pautanganSettings.globalEnabled || currentRole === UserRole.SuperAdmin)
   );
 
+  // Ensure each signed-in coworker has a private DeskPantry AI conversation thread (ai-<uid>)
+  const ensuredPrivateAiUidRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!authUser?.id || authUser.role === UserRole.Guest) {
+      ensuredPrivateAiUidRef.current = null;
+      return;
+    }
+    if (ensuredPrivateAiUidRef.current === authUser.id) return;
+    ensuredPrivateAiUidRef.current = authUser.id;
+    const privateAiId = `ai-${authUser.id}`;
+    const meta: Omit<ChatThread, 'messages'> = {
+      id: privateAiId,
+      title: `DeskPantry AI · ${authUser.name}`.slice(0, 140),
+      subtitle: 'Private Gemini Assistant · Visible only to you',
+      type: 'ai',
+      participantIds: [authUser.id],
+      unreadCount: 0,
+    };
+    void createChatThread(meta)
+      .then(() => {
+        setThreads((prev) =>
+          prev.some((t) => t.id === privateAiId)
+            ? prev
+            : [{ ...meta, messages: [] }, ...prev]
+        );
+      })
+      .catch((err) => {
+        console.error('Failed to ensure private AI thread:', err);
+      });
+  }, [authUser?.id, authUser?.role, authUser?.name]);
+
   // Guard restricted views and close notification drawer when signed out / guest
   useEffect(() => {
     if (!currentUser || currentRole === UserRole.Guest) {
       setIsNotifOpen(false);
       setIsProfileMenuOpen(false);
     }
-    if (activeSection === 'admin' && !isAdminOrSuper) {
+    if ((activeSection === 'admin' || activeSection === 'developer') && !isAdminOrSuper) {
       setActiveSection('store');
     }
     if (activeSection === 'delivery' && !canViewDeliveryNav) {
@@ -409,6 +518,78 @@ export default function App() {
     [orders]
   );
 
+  const allRegisteredCoworkers = useMemo<CoworkerProfile[]>(() => {
+    const map = new Map<string, CoworkerProfile>();
+    for (const p of coworkerProfiles) {
+      if (p.id) map.set(p.id, p);
+    }
+    for (const u of users) {
+      if (u.id && !map.has(u.id)) {
+        map.set(u.id, {
+          id: u.id,
+          name: u.name,
+          department: u.department,
+          tableRow: u.tableRow,
+          tableNumber: u.tableNumber,
+          avatarInitials: u.avatarInitials,
+          avatarUrl: u.avatarUrl,
+        });
+      }
+    }
+    if (authUser && !map.has(authUser.id)) {
+      map.set(authUser.id, {
+        id: authUser.id,
+        name: authUser.name,
+        department: authUser.department,
+        tableRow: authUser.tableRow,
+        tableNumber: authUser.tableNumber,
+        avatarInitials: authUser.avatarInitials,
+        avatarUrl: authUser.avatarUrl,
+      });
+    }
+    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }, [coworkerProfiles, users, authUser]);
+
+  const autoDeleteAttemptedRef = useRef<Set<string>>(new Set());
+  const stampedCompletedAtRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!authUser?.id) return;
+    const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+    const runCleanup = () => {
+      const now = Date.now();
+      for (const post of ewalletPosts) {
+        if (post.status !== 'Completed') continue;
+
+        if (typeof post.completedAtMs === 'number') {
+          if (now >= post.completedAtMs + ONE_WEEK_MS + 5000) {
+            if (autoDeleteAttemptedRef.current.has(post.id)) continue;
+            autoDeleteAttemptedRef.current.add(post.id);
+            setEWalletPosts((prev) => prev.filter((p) => p.id !== post.id));
+            void deleteEWalletPost(post.id).catch((err) => {
+              autoDeleteAttemptedRef.current.delete(post.id);
+              console.error('Failed to auto-delete expired E-Wallet post:', err);
+            });
+          }
+        } else if (isActualAdmin && !stampedCompletedAtRef.current.has(post.id)) {
+          stampedCompletedAtRef.current.add(post.id);
+          const stampMs = now;
+          setEWalletPosts((prev) =>
+            prev.map((p) => (p.id === post.id ? { ...p, completedAtMs: stampMs } : p))
+          );
+          void updateEWalletPostPartial(post.id, { completedAtMs: stampMs }).catch(() => {
+            stampedCompletedAtRef.current.delete(post.id);
+          });
+        }
+      }
+    };
+
+    runCleanup();
+    const timer = window.setInterval(runCleanup, 60_000);
+    return () => window.clearInterval(timer);
+  }, [ewalletPosts, authUser?.id, isActualAdmin]);
+
   const effectiveNotifications = useMemo(() => {
     if (!currentUser || currentRole === UserRole.Guest) {
       return [];
@@ -423,7 +604,7 @@ export default function App() {
         t.includes('for-sale submission') ||
         t.includes('for-sale listing pending')
       ) {
-        return 'super_admin';
+        return 'admins';
       }
       if (t.includes('payment proof') || t.includes('due-date reminder sent')) {
         return 'admins';
@@ -447,9 +628,15 @@ export default function App() {
       // 1. Payments reminder
       if (n.type === 'reminder') return true;
 
-      // 2. Comments on their Buy/Sell E-Wallet post
+      // 2. Comments and share orders on their Buy/Sell E-Wallet post (never broadcast new posts)
       if (n.type === 'ewallet') {
-        return titleLower.includes('comment') || bodyLower.includes('commented');
+        return (
+          titleLower.includes('comment') ||
+          bodyLower.includes('commented') ||
+          titleLower.includes('share') ||
+          titleLower.includes('order') ||
+          bodyLower.includes('claimed')
+        );
       }
 
       // 3. Payment on their debt (exclude order confirmations, declines, and order payment proofs)
@@ -470,10 +657,14 @@ export default function App() {
         return true;
       }
 
+      // 4. Unread coworker chat messages
+      if (n.type === 'chat') return true;
+
       return false;
     };
 
     return notifications
+      .filter((n) => !dismissedNotifIds[n.id])
       .filter((n) => {
         const target = resolveEffectiveTarget(n);
         if (target === 'delivery') return canViewDeliveryNav;
@@ -489,15 +680,47 @@ export default function App() {
     notifications,
     proofs,
     localReadNotifIds,
+    dismissedNotifIds,
     currentUser,
     currentRole,
     canViewDeliveryNav,
     isAdminOrSuper,
   ]);
 
+  const myPrivateAiThread = useMemo<ChatThread | null>(() => {
+    if (!currentUser) return null;
+    const found = threads.find(
+      (t) =>
+        t.type === 'ai' &&
+        (t.id === `ai-${currentUser.id}` || t.participantIds.includes(currentUser.id))
+    );
+    if (found) return found;
+    return {
+      id: `ai-${currentUser.id}`,
+      title: `DeskPantry AI · ${currentUser.name}`.slice(0, 140),
+      subtitle: 'Private Gemini Assistant · Visible only to you',
+      type: 'ai',
+      participantIds: [currentUser.id],
+      unreadCount: 0,
+      messages: [],
+    };
+  }, [threads, currentUser?.id, currentUser?.name]);
+
   const unreadNotifCount = effectiveNotifications.filter((n) => !n.read).length;
   const unreadChatCount = currentUser
-    ? threads.reduce((sum, t) => sum + t.unreadCount, 0)
+    ? threads.reduce((sum, t) => {
+        const isMyInbox =
+          (t.type === 'ai' &&
+            (t.id === `ai-${currentUser.id}` || t.participantIds.includes(currentUser.id))) ||
+          t.type === 'channel' ||
+          (t.type === 'dm' && t.participantIds.includes(currentUser.id));
+        if (!isMyInbox) return sum;
+        const countForMe =
+          t.unreadBy && typeof t.unreadBy === 'object'
+            ? Math.max(0, Number(t.unreadBy[currentUser.id] ?? 0))
+            : Math.max(0, Number(t.unreadCount ?? 0));
+        return sum + countForMe;
+      }, 0)
     : 0;
   const storeProofs = useMemo(
     () => proofs.filter((p) => p.purpose !== 'Community Seller Settlement'),
@@ -605,6 +828,55 @@ export default function App() {
     );
   };
 
+  const handleSaveWorkstationProfile = async (workstation: {
+    department: string;
+    tableRow: string;
+    tableNumber: string;
+  }): Promise<void> => {
+    if (!authUser) {
+      throw new Error('Sign in to update your department and desk location.');
+    }
+    const cleanDept = workstation.department.trim();
+    const cleanRow = workstation.tableRow.trim();
+    const cleanTable = workstation.tableNumber.trim();
+    const prevAuthUser = authUser;
+    const prevUsers = users;
+    const prevProfiles = coworkerProfiles;
+
+    setAuthUser((prev) =>
+      prev
+        ? { ...prev, department: cleanDept, tableRow: cleanRow, tableNumber: cleanTable }
+        : prev
+    );
+    setUsers((prev) =>
+      prev.map((u) =>
+        u.id === authUser.id
+          ? { ...u, department: cleanDept, tableRow: cleanRow, tableNumber: cleanTable }
+          : u
+      )
+    );
+    setCoworkerProfiles((prev) =>
+      prev.map((p) =>
+        p.id === authUser.id
+          ? { ...p, department: cleanDept, tableRow: cleanRow, tableNumber: cleanTable }
+          : p
+      )
+    );
+
+    try {
+      await updateUserWorkstationProfile(authUser.id, {
+        department: cleanDept,
+        tableRow: cleanRow,
+        tableNumber: cleanTable,
+      });
+    } catch (err) {
+      setAuthUser(prevAuthUser);
+      setUsers(prevUsers);
+      setCoworkerProfiles(prevProfiles);
+      throw err;
+    }
+  };
+
   const handlePlaceOrder = (payload: {
     fulfillment: FulfillmentType;
     deliveryNote: string;
@@ -612,6 +884,9 @@ export default function App() {
     proofChannel?: string;
     proofRef?: string;
     proofImage?: string;
+    buyerDepartment?: string;
+    buyerTableRow?: string;
+    buyerTableNumber?: string;
   }) => {
     if (!currentUser) return;
 
@@ -649,13 +924,35 @@ export default function App() {
     const isPickup = payload.fulfillment === FulfillmentType.Pickup;
     const defaultRunner = users.find((u) => u.role === UserRole.DeliveryStaff);
     const runnerName = isPickup
-      ? 'Counter B Pickup'
+      ? 'Pick Up'
       : defaultRunner?.name ?? 'Kuya Jun Reyes';
+
+    const cleanBuyerDept = payload.buyerDepartment?.trim() || currentUser.department;
+    const cleanBuyerRow = payload.buyerTableRow?.trim() || currentUser.tableRow || '';
+    const cleanBuyerTable = payload.buyerTableNumber?.trim() || currentUser.tableNumber || '';
+
+    const needsProfileSync =
+      (!authUser?.department?.trim() ||
+        authUser.department === 'Department Staff' ||
+        authUser.department === 'Unassigned' ||
+        !authUser?.tableRow?.trim() ||
+        !authUser?.tableNumber?.trim()) &&
+      Boolean(cleanBuyerDept && cleanBuyerRow && cleanBuyerTable);
+    if (needsProfileSync) {
+      void handleSaveWorkstationProfile({
+        department: cleanBuyerDept,
+        tableRow: cleanBuyerRow,
+        tableNumber: cleanBuyerTable,
+      }).catch(() => {});
+    }
 
     const newOrder: StoreOrder = {
       id: orderId,
       userId: currentUser.id,
       userName: currentUser.name,
+      buyerDepartment: cleanBuyerDept || undefined,
+      buyerTableRow: cleanBuyerRow || undefined,
+      buyerTableNumber: cleanBuyerTable || undefined,
       items: orderItems,
       totalAmount,
       deliveryFee,
@@ -773,8 +1070,10 @@ export default function App() {
 
     const defaultRunner = users.find((u) => u.role === UserRole.DeliveryStaff);
     const runnerName = isPickup
-      ? 'Counter B Pickup'
-      : targetOrder.assignedRunner && targetOrder.assignedRunner !== 'Counter B Pickup'
+      ? 'Pick Up'
+      : targetOrder.assignedRunner &&
+          targetOrder.assignedRunner !== 'Counter B Pickup' &&
+          targetOrder.assignedRunner !== 'Pick Up'
         ? targetOrder.assignedRunner
         : defaultRunner?.name ?? 'Kuya Jun Reyes';
 
@@ -792,7 +1091,7 @@ export default function App() {
           id: `lg-app-${Date.now()}`,
           timestamp: nowLabel,
           event: isPickup
-            ? `Approved & stock released by ${actorName} (${targetOrder.fulfillment}) — Completed at Counter B`
+            ? `Approved & stock released by ${actorName} (${targetOrder.fulfillment}) — Pick Up Completed`
             : `Approved & stock released by ${actorName} — Dispatched to ${runnerName}`,
           actor: actorName,
         },
@@ -920,10 +1219,16 @@ export default function App() {
   };
 
   const handleApprovePendingOrder = async (orderId: string): Promise<void> => {
+    if (!isActualAdmin) {
+      throw new Error('Admin access required to confirm sales orders.');
+    }
     await approveOrderInternal(orderId);
   };
 
   const handleRejectPendingOrder = async (orderId: string): Promise<void> => {
+    if (!isActualAdmin) {
+      throw new Error('Admin access required to reject sales orders.');
+    }
     const targetOrder = orders.find((o) => o.id === orderId);
     if (!targetOrder) {
       throw new Error(`Order ${orderId} not found.`);
@@ -996,7 +1301,7 @@ export default function App() {
     itemCount: number;
     ownerCommission: number;
   }> => {
-    if (!authUser) {
+    if (!authUser || !isActualAdmin) {
       throw new Error('Sign in with an Admin account to sync Firestore data.');
     }
     const res = await syncAllFirestoreDataNow({
@@ -1020,6 +1325,7 @@ export default function App() {
     }
     if (res.currentUser) setAuthUser(res.currentUser);
     if (res.users.length > 0) setUsers(res.users);
+    if (res.coworkerProfiles.length > 0) setCoworkerProfiles(res.coworkerProfiles);
     setOrders(res.orders);
     setProofs(res.proofs);
     setSuggestions(res.suggestions);
@@ -1051,13 +1357,14 @@ export default function App() {
     deliveryStatus: 'Pending Dispatch' | 'Out for Delivery' | 'Delivered',
     cashCollected?: boolean
   ) => {
+    if (actualRole !== UserRole.DeliveryStaff && !isActualAdmin) return;
     const actorName = currentUser?.name ?? 'Delivery Staff';
     const stamp = `${new Date().toISOString().slice(0, 10)} ${new Date().toLocaleTimeString(
       [],
       { hour: '2-digit', minute: '2-digit' }
     )}`;
     const target = orders.find((o) => o.id === orderId);
-    if (!target) return;
+    if (!target || target.source === 'marketplace') return;
 
     const nextLogs = [
       ...(target.logs ?? []),
@@ -1072,7 +1379,11 @@ export default function App() {
       },
     ];
 
+    const nextOrderStatus =
+      deliveryStatus === 'Delivered' ? 'Completed' : target.status;
+
     const patch: Partial<StoreOrder> = {
+      status: nextOrderStatus,
       deliveryStatus,
       cashCollected: cashCollected ?? target.cashCollected,
       assignedRunner: target.assignedRunner || actorName,
@@ -1086,7 +1397,6 @@ export default function App() {
           ? {
               ...o,
               ...patch,
-              status: deliveryStatus === 'Delivered' ? 'Completed' : o.status,
             }
           : o
       )
@@ -1099,28 +1409,78 @@ export default function App() {
     }
   };
 
-  const handleToggleVote = (suggestionId: string) => {
+  const handleToggleVote = (
+    suggestionId: string,
+    direction: 'up' | 'down' = 'up'
+  ) => {
     if (!currentUser) return;
     const target = suggestions.find((s) => s.id === suggestionId);
     if (!target) return;
-    const already = target.voterIds.includes(currentUser.id);
-    const nextVoterIds = already
-      ? target.voterIds.filter((id) => id !== currentUser.id)
-      : [...target.voterIds, currentUser.id];
-    const nextVoterNames = already
-      ? target.voterNames.filter((n) => n !== currentUser.name)
-      : [...target.voterNames, currentUser.name];
+
+    const existingUpIds = target.voterIds ?? [];
+    const existingUpNames = target.voterNames ?? [];
+    const existingDownIds = target.downvoterIds ?? [];
+    const existingDownNames = target.downvoterNames ?? [];
+
+    let nextVoterIds = existingUpIds;
+    let nextVoterNames = existingUpNames;
+    let nextDownvoterIds = existingDownIds;
+    let nextDownvoterNames = existingDownNames;
+
+    if (direction === 'up') {
+      const alreadyUp = existingUpIds.includes(currentUser.id);
+      nextVoterIds = alreadyUp
+        ? existingUpIds.filter((id) => id !== currentUser.id)
+        : [...existingUpIds, currentUser.id];
+      nextVoterNames = alreadyUp
+        ? existingUpNames.filter((n) => n !== currentUser.name)
+        : existingUpNames.includes(currentUser.name)
+          ? existingUpNames
+          : [...existingUpNames, currentUser.name];
+      if (!alreadyUp) {
+        nextDownvoterIds = existingDownIds.filter((id) => id !== currentUser.id);
+        nextDownvoterNames = existingDownNames.filter((n) => n !== currentUser.name);
+      }
+    } else {
+      const alreadyDown = existingDownIds.includes(currentUser.id);
+      nextDownvoterIds = alreadyDown
+        ? existingDownIds.filter((id) => id !== currentUser.id)
+        : [...existingDownIds, currentUser.id];
+      nextDownvoterNames = alreadyDown
+        ? existingDownNames.filter((n) => n !== currentUser.name)
+        : existingDownNames.includes(currentUser.name)
+          ? existingDownNames
+          : [...existingDownNames, currentUser.name];
+      if (!alreadyDown) {
+        nextVoterIds = existingUpIds.filter((id) => id !== currentUser.id);
+        nextVoterNames = existingUpNames.filter((n) => n !== currentUser.name);
+      }
+    }
 
     setUnreadCommunityCount((c) => c + 1);
-    setLastFeedEvent(`${currentUser.name} voted on "${target.title}".`);
+    setLastFeedEvent(
+      `${currentUser.name} ${direction === 'up' ? 'upvoted' : 'downvoted'} "${target.title}".`
+    );
     setSuggestions((prev) =>
       prev.map((s) =>
         s.id === suggestionId
-          ? { ...s, voterIds: nextVoterIds, voterNames: nextVoterNames }
+          ? {
+              ...s,
+              voterIds: nextVoterIds,
+              voterNames: nextVoterNames,
+              downvoterIds: nextDownvoterIds,
+              downvoterNames: nextDownvoterNames,
+            }
           : s
       )
     );
-    void updateSuggestionVotes(suggestionId, nextVoterIds, nextVoterNames);
+    void updateSuggestionVotes(
+      suggestionId,
+      nextVoterIds,
+      nextVoterNames,
+      nextDownvoterIds,
+      nextDownvoterNames
+    );
   };
 
   const handleCreateSuggestion = (
@@ -1139,12 +1499,69 @@ export default function App() {
       createdAt: 'Just now',
       voterIds: [currentUser.id],
       voterNames: [currentUser.name],
+      downvoterIds: [],
+      downvoterNames: [],
       status: 'Open for Votes',
+      comments: [],
     };
     setSuggestions((prev) => [newSug, ...prev]);
     setUnreadCommunityCount((c) => c + 1);
     setLastFeedEvent(`${currentUser.name} requested "${title}" on Suggestions Feed.`);
     void saveSuggestion(newSug);
+  };
+
+  const handleDeleteSuggestion = async (suggestionId: string): Promise<void> => {
+    if (!currentUser) return;
+    const target = suggestions.find((s) => s.id === suggestionId);
+    if (!target) return;
+    if (!isActualAdmin && target.requestedById !== currentUser.id) {
+      throw new Error('Only the suggestion author or an Admin can delete this post.');
+    }
+    const previous = suggestions;
+    setSuggestions((prev) => prev.filter((s) => s.id !== suggestionId));
+    try {
+      await deleteSuggestionDoc(suggestionId);
+    } catch (err) {
+      setSuggestions(previous);
+      throw err;
+    }
+  };
+
+  const handleAddSuggestionComment = (suggestionId: string, text: string) => {
+    if (!currentUser) return;
+    const target = suggestions.find((s) => s.id === suggestionId);
+    if (!target || !text.trim()) return;
+    const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const nextComment: SuggestionComment = {
+      id: `sugc-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+      userId: currentUser.id,
+      userName: currentUser.name,
+      userDepartment: currentUser.department,
+      text: text.trim().slice(0, 400),
+      createdAt: `${todayIso} ${nowTime}`,
+    };
+    const nextComments = [...(target.comments ?? []), nextComment];
+    setSuggestions((prev) =>
+      prev.map((s) => (s.id === suggestionId ? { ...s, comments: nextComments } : s))
+    );
+    void updateSuggestionComments(suggestionId, nextComments);
+  };
+
+  const handleUpdateSuggestionStatus = (
+    suggestionId: string,
+    status: SuggestionItem['status']
+  ) => {
+    if (!isActualAdmin) return;
+    const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const addedToStoreAt = status === 'Added to Pantry' ? `${todayIso} ${nowTime}` : undefined;
+    setSuggestions((prev) =>
+      prev.map((s) =>
+        s.id === suggestionId ? { ...s, status, addedToStoreAt } : s
+      )
+    );
+    void updateSuggestionStatus(suggestionId, status, addedToStoreAt);
   };
 
   const handleCreateListing = (payload: {
@@ -1196,12 +1613,12 @@ export default function App() {
     void saveMarketplaceListing(newListing);
     void createNotificationDoc({
       id: `notif-mkt-${Date.now()}`,
-      title: 'For-Sale Listing Pending Super Admin Approval',
+      title: 'For-Sale Listing Pending Admin Approval',
       body: `${currentUser.name} submitted "${payload.title}" (${formatPHP(payload.price)}) for review.`,
       timestamp: 'Just now',
       type: 'marketplace',
       read: false,
-      targetUserId: 'super_admin',
+      targetUserId: 'admins',
     });
   };
 
@@ -1209,7 +1626,12 @@ export default function App() {
     listingId: string,
     paymentMethod: PaymentMethod.Cash | PaymentMethod.Debt,
     fulfillment: FulfillmentType,
-    quantity = 1
+    quantity = 1,
+    buyerLocation?: {
+      buyerDepartment?: string;
+      buyerTableRow?: string;
+      buyerTableNumber?: string;
+    }
   ) => {
     if (!currentUser) return;
     const target = listings.find((l) => l.id === listingId);
@@ -1223,19 +1645,40 @@ export default function App() {
       target.commissionValue
     );
 
-    const deliveryFee =
-      fulfillment === FulfillmentType.Delivery && storeConfig.deliveryEnabled
-        ? storeConfig.deliveryFee
-        : 0;
-    const totalAmount = target.price * qty + deliveryFee;
+    // Community sellers handle delivery directly — independent of Store Delivery Staff & delivery fee
+    const totalAmount = target.price * qty;
     const todayIso = new Date().toISOString().slice(0, 10);
     const nowLabel = `${todayIso} ${new Date().toLocaleTimeString([], {
       hour: '2-digit',
       minute: '2-digit',
     })}`;
 
+    const cleanBuyerDept = buyerLocation?.buyerDepartment?.trim() || currentUser.department;
+    const cleanBuyerRow = buyerLocation?.buyerTableRow?.trim() || currentUser.tableRow || '';
+    const cleanBuyerTable = buyerLocation?.buyerTableNumber?.trim() || currentUser.tableNumber || '';
+    const workstationSummary = formatBuyerWorkstation({
+      buyerDepartment: cleanBuyerDept,
+      buyerTableRow: cleanBuyerRow,
+      buyerTableNumber: cleanBuyerTable,
+    });
+
+    const needsProfileSync =
+      (!authUser?.department?.trim() ||
+        authUser.department === 'Department Staff' ||
+        authUser.department === 'Unassigned' ||
+        !authUser?.tableRow?.trim() ||
+        !authUser?.tableNumber?.trim()) &&
+      Boolean(cleanBuyerDept && cleanBuyerRow && cleanBuyerTable);
+    if (needsProfileSync) {
+      void handleSaveWorkstationProfile({
+        department: cleanBuyerDept,
+        tableRow: cleanBuyerRow,
+        tableNumber: cleanBuyerTable,
+      }).catch(() => {});
+    }
+
     // Seller must confirm first before releasing stock, adding to buyer Community Debt ledger,
-    // or dispatching to Delivery Staff. Also never touches Store debtBalance.
+    // or starting seller delivery. Never touches Store debtBalance or Store Delivery Staff queue.
     const newOrder: StoreOrder = {
       id: `MKT-${Date.now().toString(36).toUpperCase()}-${Math.random()
         .toString(36)
@@ -1243,6 +1686,9 @@ export default function App() {
         .toUpperCase()}`,
       userId: currentUser.id,
       userName: currentUser.name,
+      buyerDepartment: cleanBuyerDept || undefined,
+      buyerTableRow: cleanBuyerRow || undefined,
+      buyerTableNumber: cleanBuyerTable || undefined,
       items: [
         {
           itemId: target.id,
@@ -1252,14 +1698,20 @@ export default function App() {
         },
       ],
       totalAmount,
-      deliveryFee,
-      deliveryCommission: deliveryFee,
+      deliveryFee: 0,
+      deliveryCommission: 0,
       fulfillment,
+      deliveryNote:
+        fulfillment === FulfillmentType.Delivery && workstationSummary
+          ? workstationSummary
+          : undefined,
       paymentMethod,
       status: 'Pending Seller Confirmation',
       deliveryStatus: 'Pending Seller Approval',
       assignedRunner:
-        fulfillment === FulfillmentType.Delivery ? 'Pending Seller Approval' : 'Seller Pickup',
+        fulfillment === FulfillmentType.Delivery
+          ? `${target.sellerName} (Seller Delivery)`
+          : 'Seller Pickup',
       cashCollected: false,
       createdAt: nowLabel,
       orderDateIso: todayIso,
@@ -1294,7 +1746,13 @@ export default function App() {
     if (!isOrderPendingSellerConfirmation(targetOrder)) {
       throw new Error(`Order ${orderId} has already been processed.`);
     }
-    if (targetOrder.sellerId && targetOrder.sellerId !== currentUser.id) {
+    const ownsListing = targetOrder.items.some((li) =>
+      listings.some((l) => l.id === li.itemId && l.sellerId === currentUser.id)
+    );
+    if (
+      (targetOrder.sellerId && targetOrder.sellerId !== currentUser.id) ||
+      (!targetOrder.sellerId && !ownsListing)
+    ) {
       throw new Error('Only the seller who posted this item can confirm the order.');
     }
 
@@ -1317,10 +1775,10 @@ export default function App() {
 
     const isPickup = targetOrder.fulfillment === FulfillmentType.Pickup;
     const isCash = targetOrder.paymentMethod === PaymentMethod.Cash;
-    const defaultRunner = users.find((u) => u.role === UserRole.DeliveryStaff);
+    // Community seller fulfills Delivery personally (never routed to Store Delivery Staff)
     const runnerName = isPickup
       ? 'Seller Pickup'
-      : defaultRunner?.name ?? 'Delivery Runner';
+      : `${currentUser.name} (Seller Delivery)`;
     const todayIso = new Date().toISOString().slice(0, 10);
     const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const nowLabel = `${todayIso} ${nowTime}`;
@@ -1332,7 +1790,7 @@ export default function App() {
         timestamp: nowLabel,
         event: isPickup
           ? `Order confirmed & stock released by ${currentUser.name} (Pickup)`
-          : `Order confirmed & stock released by ${currentUser.name} — Queued for Delivery Staff`,
+          : `Order confirmed & stock released by ${currentUser.name} — Prepared for Seller Delivery`,
         actor: currentUser.name,
       },
     ];
@@ -1341,7 +1799,7 @@ export default function App() {
       ...targetOrder,
       status: isPickup ? 'Completed' : 'Confirmed',
       deliveryStatus: isPickup ? 'Delivered' : 'Pending Dispatch',
-      assignedRunnerId: isPickup ? undefined : defaultRunner?.id,
+      assignedRunnerId: undefined,
       assignedRunner: runnerName,
       deliveredAt: isPickup ? nowLabel : targetOrder.deliveredAt,
       cashCollected: isPickup && isCash ? true : targetOrder.cashCollected,
@@ -1383,6 +1841,76 @@ export default function App() {
     }
   };
 
+  const handleSellerMarkOrderDelivered = async (orderId: string): Promise<void> => {
+    if (!currentUser) return;
+    const targetOrder = orders.find((o) => o.id === orderId);
+    if (!targetOrder) {
+      throw new Error(`Order ${orderId} not found.`);
+    }
+    if (targetOrder.source !== 'marketplace') {
+      throw new Error('Only community marketplace orders can be marked delivered here.');
+    }
+    const ownsListing = targetOrder.items.some((li) =>
+      listings.some((l) => l.id === li.itemId && l.sellerId === currentUser.id)
+    );
+    if (
+      (targetOrder.sellerId && targetOrder.sellerId !== currentUser.id) ||
+      (!targetOrder.sellerId && !ownsListing)
+    ) {
+      throw new Error('Only the seller who posted this item can mark it delivered.');
+    }
+    if (
+      targetOrder.fulfillment !== FulfillmentType.Delivery ||
+      targetOrder.status !== 'Confirmed'
+    ) {
+      throw new Error('Only confirmed seller-delivery orders can be marked delivered.');
+    }
+
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const nowLabel = `${todayIso} ${nowTime}`;
+    const isCash = targetOrder.paymentMethod === PaymentMethod.Cash;
+    const nextLogs = [
+      ...(targetOrder.logs ?? []),
+      {
+        id: `lg-sel-del-${Date.now()}`,
+        timestamp: nowLabel,
+        event: `Seller delivery completed by ${currentUser.name}${
+          isCash ? ' & Cash collected' : ''
+        }`,
+        actor: currentUser.name,
+      },
+    ];
+
+    const updatedOrder: StoreOrder = {
+      ...targetOrder,
+      status: 'Completed',
+      deliveryStatus: 'Delivered',
+      assignedRunnerId: undefined,
+      assignedRunner: `${currentUser.name} (Seller Delivery)`,
+      deliveredAt: nowLabel,
+      cashCollected: isCash ? true : targetOrder.cashCollected,
+      logs: nextLogs,
+    };
+
+    const prevOrders = orders;
+    setOrders((prev) => prev.map((o) => (o.id === orderId ? updatedOrder : o)));
+    try {
+      await updateMarketplaceOrderConfirmation(orderId, {
+        status: updatedOrder.status,
+        deliveryStatus: updatedOrder.deliveryStatus,
+        assignedRunnerId: updatedOrder.assignedRunnerId,
+        assignedRunner: updatedOrder.assignedRunner,
+        deliveredAt: updatedOrder.deliveredAt,
+        cashCollected: updatedOrder.cashCollected,
+        logs: nextLogs,
+      });
+    } catch (err) {
+      setOrders(prevOrders);
+      throw err;
+    }
+  };
+
   const handleSellerRejectOrder = async (orderId: string): Promise<void> => {
     if (!currentUser) return;
     const targetOrder = orders.find((o) => o.id === orderId);
@@ -1391,6 +1919,15 @@ export default function App() {
     }
     if (!isOrderPendingSellerConfirmation(targetOrder)) {
       throw new Error(`Order ${orderId} has already been processed.`);
+    }
+    const ownsListing = targetOrder.items.some((li) =>
+      listings.some((l) => l.id === li.itemId && l.sellerId === currentUser.id)
+    );
+    if (
+      (targetOrder.sellerId && targetOrder.sellerId !== currentUser.id) ||
+      (!targetOrder.sellerId && !ownsListing)
+    ) {
+      throw new Error('Only the seller who posted this item can decline the order.');
     }
 
     const todayIso = new Date().toISOString().slice(0, 10);
@@ -1467,6 +2004,16 @@ export default function App() {
   ): Promise<void> => {
     const target = orders.find((o) => o.id === orderId);
     if (!target || !currentUser) return;
+    if (target.source !== 'marketplace') return;
+    const ownsListing = target.items.some((li) =>
+      listings.some((l) => l.id === li.itemId && l.sellerId === currentUser.id)
+    );
+    if (
+      (target.sellerId && target.sellerId !== currentUser.id) ||
+      (!target.sellerId && !ownsListing)
+    ) {
+      throw new Error('Only the seller who posted this item can mark its debt settled.');
+    }
     const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const todayIso = new Date().toISOString().slice(0, 10);
     const nowLabel = `${todayIso} ${nowTime}`;
@@ -1919,6 +2466,7 @@ export default function App() {
   };
 
   const handleReviewProof = (proofId: string, decision: 'approved' | 'rejected') => {
+    if (!isActualAdmin) return;
     const target = proofs.find((p) => p.id === proofId);
     if (!target || target.status !== 'pending') return;
     if (target.purpose === 'Community Seller Settlement') return;
@@ -2037,6 +2585,7 @@ export default function App() {
     listingId: string,
     decision: 'approved' | 'rejected'
   ) => {
+    if (!isActualAdmin) return;
     const target = listings.find((l) => l.id === listingId);
     if (!target) return;
     const updated: MarketplaceListing = { ...target, approvalStatus: decision };
@@ -2051,6 +2600,12 @@ export default function App() {
   };
 
   const handleDeleteListing = async (listingId: string): Promise<void> => {
+    if (!currentUser) return;
+    const target = listings.find((l) => l.id === listingId);
+    if (!target) return;
+    if (!isActualAdmin && target.sellerId !== currentUser.id) {
+      throw new Error('Only the seller or an Admin can delete this listing.');
+    }
     const previous = listings;
     setListings((prev) => prev.filter((l) => l.id !== listingId));
     try {
@@ -2070,6 +2625,9 @@ export default function App() {
     deliveryNote?: string;
     paymentMethod: string;
   }): Promise<StoreOrder> => {
+    if (!isActualAdmin) {
+      throw new Error('Admin access required to create walk-in sales orders.');
+    }
     const lineItems = payload.items
       .map((entry) => {
         const product = items.find((i) => i.id === entry.itemId);
@@ -2120,7 +2678,7 @@ export default function App() {
     const isPickup = payload.fulfillment === FulfillmentType.Pickup;
     const defaultRunner = users.find((u) => u.role === UserRole.DeliveryStaff);
     const runnerName = isPickup
-      ? 'Counter B Walk-in'
+      ? 'Pick Up'
       : defaultRunner?.name ?? 'Kuya Jun Reyes';
 
     const orderId = `ORD-${Date.now().toString(36).toUpperCase()}-${Math.random()
@@ -2238,7 +2796,7 @@ export default function App() {
     note?: string;
   }): Promise<StockAdjustmentLog> => {
     const actorId = authUser?.id ?? currentUser?.id;
-    if (!actorId) {
+    if (!actorId || !isActualAdmin) {
       throw new Error('Sign in with an Admin account to record stock adjustments.');
     }
     const target = items.find((i) => i.id === payload.itemId);
@@ -2317,6 +2875,7 @@ export default function App() {
   };
 
   const handleSendReminders = () => {
+    if (!isActualAdmin) return;
     const debtors = users.filter((u) => u.debtBalance > 0);
     const nowMs = Date.now();
     debtors.forEach((debtor, idx) => {
@@ -2334,6 +2893,7 @@ export default function App() {
 
   const handleSendMessage = (threadId: string, text: string) => {
     if (!currentUser) return;
+    const targetThread = threads.find((t) => t.id === threadId);
     const msg = {
       id: `m-${Date.now()}`,
       senderId: currentUser.id,
@@ -2342,12 +2902,82 @@ export default function App() {
       text,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     };
+
+    let nextUnreadBy: Record<string, number> | undefined;
+    let nextUnreadTotal = targetThread?.unreadCount ?? 0;
+
+    if (targetThread && targetThread.type === 'dm') {
+      const baseUnread: Record<string, number> = { ...(targetThread.unreadBy ?? {}) };
+      baseUnread[currentUser.id] = 0;
+      const otherParticipants = targetThread.participantIds.filter(
+        (id) => id !== currentUser.id
+      );
+      for (const recipientId of otherParticipants) {
+        baseUnread[recipientId] = Math.max(0, Number(baseUnread[recipientId] ?? 0)) + 1;
+      }
+      nextUnreadBy = baseUnread;
+      nextUnreadTotal = Object.values(baseUnread).reduce(
+        (sum, val) => sum + (Number(val) || 0),
+        0
+      );
+
+      const nowMs = Date.now();
+      otherParticipants.forEach((recipientId, idx) => {
+        void createNotificationDoc({
+          id: `notif-chat-${nowMs}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
+          title: `Unread Message from ${currentUser.name}`.slice(0, 140),
+          body: `${currentUser.name}: "${text.slice(0, 140)}"`.slice(0, 500),
+          timestamp: 'Just now',
+          type: 'chat',
+          read: false,
+          targetUserId: recipientId,
+        });
+      });
+    }
+
+    if (
+      currentUser &&
+      threadId === `ai-${currentUser.id}` &&
+      !threads.some((t) => t.id === threadId)
+    ) {
+      const meta: Omit<ChatThread, 'messages'> = {
+        id: threadId,
+        title: `DeskPantry AI · ${currentUser.name}`.slice(0, 140),
+        subtitle: 'Private Gemini Assistant · Visible only to you',
+        type: 'ai',
+        participantIds: [currentUser.id],
+        unreadCount: 0,
+      };
+      setThreads((prev) =>
+        prev.some((t) => t.id === threadId)
+          ? prev.map((t) =>
+              t.id === threadId ? { ...t, messages: [...t.messages, msg] } : t
+            )
+          : [{ ...meta, messages: [msg] }, ...prev]
+      );
+      void createChatThread(meta)
+        .then(() => addChatMessageToThread(threadId, msg))
+        .catch((err) => console.error('Failed to persist private AI message:', err));
+      return;
+    }
+
     setThreads((prev) =>
       prev.map((t) =>
-        t.id === threadId ? { ...t, messages: [...t.messages, msg] } : t
+        t.id === threadId
+          ? {
+              ...t,
+              messages: [...t.messages, msg],
+              ...(nextUnreadBy !== undefined
+                ? { unreadBy: nextUnreadBy, unreadCount: nextUnreadTotal }
+                : {}),
+            }
+          : t
       )
     );
     void addChatMessageToThread(threadId, msg);
+    if (nextUnreadBy !== undefined) {
+      void markThreadUnreadCount(threadId, nextUnreadTotal, nextUnreadBy);
+    }
   };
 
   const handleReceiveAiReply = (threadId: string, replyText: string) => {
@@ -2359,6 +2989,31 @@ export default function App() {
       text: replyText,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     };
+    if (
+      currentUser &&
+      threadId === `ai-${currentUser.id}` &&
+      !threads.some((t) => t.id === threadId)
+    ) {
+      const meta: Omit<ChatThread, 'messages'> = {
+        id: threadId,
+        title: `DeskPantry AI · ${currentUser.name}`.slice(0, 140),
+        subtitle: 'Private Gemini Assistant · Visible only to you',
+        type: 'ai',
+        participantIds: [currentUser.id],
+        unreadCount: 0,
+      };
+      setThreads((prev) =>
+        prev.some((t) => t.id === threadId)
+          ? prev.map((t) =>
+              t.id === threadId ? { ...t, messages: [...t.messages, aiMsg] } : t
+            )
+          : [{ ...meta, messages: [aiMsg] }, ...prev]
+      );
+      void createChatThread(meta)
+        .then(() => addChatMessageToThread(threadId, aiMsg))
+        .catch((err) => console.error('Failed to persist private AI reply:', err));
+      return;
+    }
     setThreads((prev) =>
       prev.map((t) =>
         t.id === threadId ? { ...t, messages: [...t.messages, aiMsg] } : t
@@ -2368,12 +3023,125 @@ export default function App() {
   };
 
   const handleMarkThreadRead = (threadId: string) => {
+    if (!currentUser) return;
     const target = threads.find((t) => t.id === threadId);
-    if (!target || target.unreadCount === 0) return;
+    if (!target) return;
+    const userUnread =
+      target.unreadBy && typeof target.unreadBy === 'object'
+        ? Math.max(0, Number(target.unreadBy[currentUser.id] ?? 0))
+        : Math.max(0, Number(target.unreadCount ?? 0));
+    if (userUnread === 0) return;
+
+    const nextUnreadBy = {
+      ...(target.unreadBy ?? {}),
+      [currentUser.id]: 0,
+    };
+    const nextTotal =
+      target.type === 'dm'
+        ? Object.values(nextUnreadBy).reduce((sum, val) => sum + (Number(val) || 0), 0)
+        : 0;
+
     setThreads((prev) =>
-      prev.map((t) => (t.id === threadId ? { ...t, unreadCount: 0 } : t))
+      prev.map((t) =>
+        t.id === threadId
+          ? { ...t, unreadCount: nextTotal, unreadBy: nextUnreadBy }
+          : t
+      )
     );
-    void markThreadUnreadCount(threadId, 0);
+    void markThreadUnreadCount(threadId, nextTotal, nextUnreadBy);
+  };
+
+  const handleStartDirectChat = async (recipient: CoworkerProfile): Promise<string> => {
+    if (!currentUser) {
+      throw new Error('Sign in to start a direct conversation.');
+    }
+    const pair = [currentUser.id, recipient.id].sort();
+    const threadId = `dm-${pair[0]}--${pair[1]}`;
+    const existing = threads.find((t) => t.id === threadId);
+    if (existing) {
+      return existing.id;
+    }
+    const meta: Omit<ChatThread, 'messages'> = {
+      id: threadId,
+      title: `${currentUser.name} & ${recipient.name}`.slice(0, 140),
+      subtitle: `${currentUser.department || 'Team'} · ${recipient.department || 'Team'}`.slice(
+        0,
+        200
+      ),
+      type: 'dm',
+      participantIds: [currentUser.id, recipient.id],
+      unreadCount: 0,
+    };
+    await createChatThread(meta);
+    setThreads((prev) =>
+      prev.some((t) => t.id === threadId)
+        ? prev
+        : [{ ...meta, messages: [] }, ...prev]
+    );
+    return threadId;
+  };
+
+  const handleDeleteChatMessage = async (
+    threadId: string,
+    messageId: string
+  ): Promise<void> => {
+    const previous = threads;
+    setThreads((prev) =>
+      prev.map((t) =>
+        t.id === threadId
+          ? { ...t, messages: t.messages.filter((m) => m.id !== messageId) }
+          : t
+      )
+    );
+    try {
+      await deleteChatMessage(threadId, messageId);
+    } catch (err) {
+      setThreads(previous);
+      throw err;
+    }
+  };
+
+  const handleDeleteChatThread = async (threadId: string): Promise<void> => {
+    const previous = threads;
+    setThreads((prev) => prev.filter((t) => t.id !== threadId));
+    try {
+      await deleteChatThread(threadId);
+    } catch (err) {
+      setThreads(previous);
+      throw err;
+    }
+  };
+
+  const handleSaveInternalApp = async (app: InternalApp): Promise<void> => {
+    if (!isActualAdmin) {
+      throw new Error('Admin access required to manage department apps.');
+    }
+    const previous = otherApps;
+    setOtherApps((prev) => {
+      const exists = prev.some((a) => a.id === app.id);
+      if (exists) return prev.map((a) => (a.id === app.id ? app : a));
+      return [app, ...prev];
+    });
+    try {
+      await saveInternalApp(app);
+    } catch (err) {
+      setOtherApps(previous);
+      throw err;
+    }
+  };
+
+  const handleDeleteInternalApp = async (appId: string): Promise<void> => {
+    if (!isActualAdmin) {
+      throw new Error('Admin access required to remove department apps.');
+    }
+    const previous = otherApps;
+    setOtherApps((prev) => prev.filter((a) => a.id !== appId));
+    try {
+      await deleteInternalApp(appId);
+    } catch (err) {
+      setOtherApps(previous);
+      throw err;
+    }
   };
 
   const handleCreateEWalletPost = (payload: {
@@ -2422,6 +3190,8 @@ export default function App() {
     const nextRemaining = Math.max(0, target.remainingAmount - take);
     const nextStatus: EWalletPost['status'] =
       nextRemaining === 0 ? 'Completed' : 'Partially Filled';
+    const completedAtMs =
+      nextRemaining === 0 ? target.completedAtMs ?? Date.now() : target.completedAtMs;
     const nextFills = [
       ...target.fills,
       {
@@ -2438,22 +3208,61 @@ export default function App() {
     setEWalletPosts((prev) =>
       prev.map((p) =>
         p.id === postId
-          ? { ...p, remainingAmount: nextRemaining, status: nextStatus, fills: nextFills }
+          ? {
+              ...p,
+              remainingAmount: nextRemaining,
+              status: nextStatus,
+              ...(completedAtMs ? { completedAtMs } : {}),
+              fills: nextFills,
+            }
           : p
       )
     );
     void updateEWalletPostPartial(postId, {
       remainingAmount: nextRemaining,
       status: nextStatus,
+      ...(completedAtMs ? { completedAtMs } : {}),
       fills: nextFills,
       comments: target.comments,
     });
+
+    if (target.authorId && target.authorId !== currentUser.id) {
+      const actionVerb = target.type === 'sell' ? 'ordered' : 'filled';
+      void createNotificationDoc({
+        id: `notif-ewf-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        title: (nextRemaining === 0
+          ? `Your ${target.walletProvider} Order Completed`
+          : `New Share Order on Your ${target.walletProvider} Post`
+        ).slice(0, 140),
+        body: `${currentUser.name} ${actionVerb} ${formatPHP(take)} on your ${
+          target.type === 'sell' ? 'Sell' : 'Buy'
+        } ${target.walletProvider} post (${formatPHP(nextRemaining)} remaining)${
+          note ? ` · Note: "${note.slice(0, 80)}"` : ''
+        }.`.slice(0, 500),
+        timestamp: 'Just now',
+        type: 'ewallet',
+        read: false,
+        targetUserId: target.authorId,
+      });
+    }
   };
 
-  const handleAddEWalletComment = (postId: string, text: string) => {
+  const handleAddEWalletComment = (
+    postId: string,
+    text: string,
+    imageDataUrl?: string
+  ) => {
     if (!currentUser) return;
     const target = ewalletPosts.find((p) => p.id === postId);
     if (!target) return;
+    const canComment =
+      target.authorId === currentUser.id ||
+      target.fills.some((f) => f.userId === currentUser.id);
+    if (!canComment) return;
+
+    const cleanText = text.trim() || (imageDataUrl ? 'Attached receipt screenshot.' : '');
+    if (!cleanText && !imageDataUrl) return;
+
     const nowLabel = `Today · ${new Date().toLocaleTimeString([], {
       hour: '2-digit',
       minute: '2-digit',
@@ -2465,8 +3274,9 @@ export default function App() {
         userId: currentUser.id,
         userName: currentUser.name,
         userDepartment: currentUser.department,
-        text,
+        text: cleanText,
         createdAt: nowLabel,
+        ...(imageDataUrl ? { imageDataUrl } : {}),
       },
     ];
     setEWalletPosts((prev) =>
@@ -2475,23 +3285,36 @@ export default function App() {
     void updateEWalletPostPartial(postId, {
       remainingAmount: target.remainingAmount,
       status: target.status,
+      ...(target.completedAtMs ? { completedAtMs: target.completedAtMs } : {}),
       fills: target.fills,
       comments: nextComments,
     });
 
-    if (target.authorId && target.authorId !== currentUser.id) {
+    const recipientIds = Array.from(
+      new Set([
+        ...(target.authorId ? [target.authorId] : []),
+        ...target.fills.map((f) => f.userId),
+      ])
+    ).filter((uid) => Boolean(uid) && uid !== currentUser.id);
+
+    const nowMs = Date.now();
+    recipientIds.forEach((recipientId, idx) => {
+      const isAuthor = recipientId === target.authorId;
       void createNotificationDoc({
-        id: `notif-ewc-${Date.now()}`,
-        title: `New Comment on Your ${target.walletProvider} Post`.slice(0, 140),
-        body: `${currentUser.name} commented on your ${
+        id: `notif-ewc-${nowMs}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
+        title: (isAuthor
+          ? `New Comment on Your ${target.walletProvider} Post`
+          : `New Comment on ${target.authorName}'s ${target.walletProvider} Order`
+        ).slice(0, 140),
+        body: `${currentUser.name} commented on the ${
           target.type === 'sell' ? 'Sell' : 'Buy'
-        } ${target.walletProvider} post: "${text.trim().slice(0, 160)}"`.slice(0, 500),
+        } ${target.walletProvider} order: "${cleanText.slice(0, 160)}"`.slice(0, 500),
         timestamp: 'Just now',
         type: 'ewallet',
         read: false,
-        targetUserId: target.authorId,
+        targetUserId: recipientId,
       });
-    }
+    });
   };
 
   const canPersistReadInFirestore = (notif: NotificationItem): boolean => {
@@ -2520,6 +3343,31 @@ export default function App() {
     }
   };
 
+  const persistLocalDismissedMap = (nextMap: Record<string, boolean>) => {
+    if (!authUser?.id) return;
+    try {
+      window.localStorage.setItem(
+        `deskpantry_dismissed_notifs_${authUser.id}`,
+        JSON.stringify(nextMap)
+      );
+    } catch {
+      // Ignore storage quota errors
+    }
+  };
+
+  const canDeleteNotifInFirestore = (notif: NotificationItem): boolean => {
+    if (!authUser?.id) return false;
+    if (notif.targetUserId === authUser.id) return true;
+    if (
+      notif.targetUserId === 'delivery' &&
+      (actualRole === UserRole.DeliveryStaff || isActualAdmin)
+    ) {
+      return true;
+    }
+    if (isActualAdmin && notif.targetUserId !== 'all') return true;
+    return false;
+  };
+
   const handleMarkNotificationRead = (notif: NotificationItem) => {
     setLocalReadNotifIds((prev) => {
       const next = { ...prev, [notif.id]: true };
@@ -2527,7 +3375,9 @@ export default function App() {
       return next;
     });
     if (canPersistReadInFirestore(notif)) {
-      void markNotificationReadDoc(notif.id);
+      void markNotificationReadDoc(notif.id).catch((err) => {
+        console.error('Failed to mark notification read:', err);
+      });
     }
   };
 
@@ -2536,7 +3386,9 @@ export default function App() {
     for (const n of effectiveNotifications) {
       nextIds[n.id] = true;
       if (!n.read && canPersistReadInFirestore(n)) {
-        void markNotificationReadDoc(n.id);
+        void markNotificationReadDoc(n.id).catch((err) => {
+          console.error('Failed to mark notification read:', err);
+        });
       }
     }
     setLocalReadNotifIds((prev) => {
@@ -2544,6 +3396,184 @@ export default function App() {
       persistLocalReadMap(merged);
       return merged;
     });
+  };
+
+  const handleDeleteNotification = (notif: NotificationItem) => {
+    setDismissedNotifIds((prev) => {
+      const next = { ...prev, [notif.id]: true };
+      persistLocalDismissedMap(next);
+      return next;
+    });
+    if (canDeleteNotifInFirestore(notif)) {
+      setNotifications((prev) => prev.filter((item) => item.id !== notif.id));
+      void deleteNotificationDoc(notif.id).catch((err) => {
+        console.error('Failed to delete notification:', err);
+      });
+    }
+  };
+
+  const handleDeleteAllNotifications = () => {
+    if (effectiveNotifications.length === 0) return;
+    const nextDismissed: Record<string, boolean> = {};
+    const deletableIds: string[] = [];
+    for (const n of effectiveNotifications) {
+      nextDismissed[n.id] = true;
+      if (canDeleteNotifInFirestore(n)) {
+        deletableIds.push(n.id);
+      }
+    }
+    setDismissedNotifIds((prev) => {
+      const merged = { ...prev, ...nextDismissed };
+      persistLocalDismissedMap(merged);
+      return merged;
+    });
+    if (deletableIds.length > 0) {
+      const deleteSet = new Set(deletableIds);
+      setNotifications((prev) => prev.filter((item) => !deleteSet.has(item.id)));
+      void deleteNotificationDocs(deletableIds).catch((err) => {
+        console.error('Failed to delete notifications:', err);
+      });
+    }
+  };
+
+  const handleDeleteMediaAsset = async (asset: MediaAssetEntry): Promise<void> => {
+    if (!isActualAdmin) {
+      throw new Error('Admin access required to delete media assets.');
+    }
+    if (asset.source === 'proof') {
+      await clearPaymentProofImage(asset.recordId);
+      setProofs((prev) =>
+        prev.map((p) => (p.id === asset.recordId ? { ...p, imageDataUrl: '' } : p))
+      );
+      return;
+    }
+    if (asset.source === 'store') {
+      await clearStoreItemImage(asset.recordId);
+      setItems((prev) =>
+        prev.map((i) => (i.id === asset.recordId ? { ...i, image: undefined } : i))
+      );
+      return;
+    }
+    if (asset.source === 'marketplace') {
+      await clearMarketplaceListingImage(asset.recordId);
+      setListings((prev) =>
+        prev.map((l) => (l.id === asset.recordId ? { ...l, image: undefined } : l))
+      );
+      return;
+    }
+    if (asset.source === 'ewallet' && asset.subRecordId) {
+      const targetPost = ewalletPosts.find((p) => p.id === asset.recordId);
+      if (!targetPost) return;
+      const nextComments = targetPost.comments.map((c) => {
+        if (c.id !== asset.subRecordId) return c;
+        const { imageDataUrl: _removed, ...rest } = c;
+        return rest;
+      });
+      await updateEWalletPostPartial(asset.recordId, {
+        remainingAmount: targetPost.remainingAmount,
+        status: targetPost.status,
+        ...(targetPost.completedAtMs ? { completedAtMs: targetPost.completedAtMs } : {}),
+        fills: targetPost.fills,
+        comments: nextComments,
+      });
+      setEWalletPosts((prev) =>
+        prev.map((p) =>
+          p.id === asset.recordId ? { ...p, comments: nextComments } : p
+        )
+      );
+      return;
+    }
+    if (asset.source === 'app') {
+      await clearInternalAppImage(asset.recordId);
+      setOtherApps((prev) =>
+        prev.map((a) => (a.id === asset.recordId ? { ...a, image: '' } : a))
+      );
+      return;
+    }
+    if (asset.source === 'paymentMethod' && asset.paymentField) {
+      const nextConfig: StoreConfig = {
+        ...storeConfig,
+        paymentMethods: storeConfig.paymentMethods.map((pm) => {
+          if (pm.id !== asset.recordId) return pm;
+          const copy = { ...pm };
+          if (asset.paymentField === 'qrCodeImage') {
+            delete copy.qrCodeImage;
+          } else {
+            delete copy.iconImage;
+          }
+          return copy;
+        }),
+      };
+      await saveStoreConfig(nextConfig, dueDaysRef.current);
+      setStoreConfig(nextConfig);
+    }
+  };
+
+  const handleBulkDeleteMediaAssets = async (
+    assetsToDelete: MediaAssetEntry[]
+  ): Promise<void> => {
+    if (!isActualAdmin) {
+      throw new Error('Admin access required to clear media storage.');
+    }
+    // Group e-wallet comment updates by postId and paymentMethod updates cleanly
+    const ewalletByPost = new Map<string, Set<string>>();
+    const pmFieldsByMethod = new Map<string, Set<'qrCodeImage' | 'iconImage'>>();
+    const singleQueue: MediaAssetEntry[] = [];
+
+    for (const asset of assetsToDelete) {
+      if (asset.source === 'ewallet' && asset.subRecordId) {
+        const set = ewalletByPost.get(asset.recordId) ?? new Set<string>();
+        set.add(asset.subRecordId);
+        ewalletByPost.set(asset.recordId, set);
+      } else if (asset.source === 'paymentMethod' && asset.paymentField) {
+        const set =
+          pmFieldsByMethod.get(asset.recordId) ?? new Set<'qrCodeImage' | 'iconImage'>();
+        set.add(asset.paymentField);
+        pmFieldsByMethod.set(asset.recordId, set);
+      } else {
+        singleQueue.push(asset);
+      }
+    }
+
+    for (const asset of singleQueue) {
+      await handleDeleteMediaAsset(asset);
+    }
+
+    for (const [postId, commentIds] of ewalletByPost.entries()) {
+      const targetPost = ewalletPosts.find((p) => p.id === postId);
+      if (!targetPost) continue;
+      const nextComments = targetPost.comments.map((c) => {
+        if (!commentIds.has(c.id)) return c;
+        const { imageDataUrl: _removed, ...rest } = c;
+        return rest;
+      });
+      await updateEWalletPostPartial(postId, {
+        remainingAmount: targetPost.remainingAmount,
+        status: targetPost.status,
+        ...(targetPost.completedAtMs ? { completedAtMs: targetPost.completedAtMs } : {}),
+        fills: targetPost.fills,
+        comments: nextComments,
+      });
+      setEWalletPosts((prev) =>
+        prev.map((p) => (p.id === postId ? { ...p, comments: nextComments } : p))
+      );
+    }
+
+    if (pmFieldsByMethod.size > 0) {
+      const nextConfig: StoreConfig = {
+        ...storeConfig,
+        paymentMethods: storeConfig.paymentMethods.map((pm) => {
+          const fields = pmFieldsByMethod.get(pm.id);
+          if (!fields) return pm;
+          const copy = { ...pm };
+          if (fields.has('qrCodeImage')) delete copy.qrCodeImage;
+          if (fields.has('iconImage')) delete copy.iconImage;
+          return copy;
+        }),
+      };
+      await saveStoreConfig(nextConfig, dueDaysRef.current);
+      setStoreConfig(nextConfig);
+    }
   };
 
   const navigateTo = (section: ActiveSection) => {
@@ -2614,7 +3644,7 @@ export default function App() {
         ]
       : []),
     { id: 'chat', label: 'Chat & AI', icon: MessageSquare, badge: unreadChatCount },
-    // Config tab is NOT visible to public / non-admin roles
+    // Config & Developer Settings tabs are strictly hidden from public / non-admin roles
     ...(isAdminOrSuper
       ? [
           {
@@ -2622,6 +3652,11 @@ export default function App() {
             label: 'Admin Config',
             icon: ShieldCheck,
             badge: pendingProofsCount + pendingOrdersCount,
+          },
+          {
+            id: 'developer' as ActiveSection,
+            label: 'Developer Settings',
+            icon: Terminal,
           },
         ]
       : []),
@@ -2866,7 +3901,7 @@ export default function App() {
           },
         ]
       : []),
-    { id: 'chat', label: 'Chat', badge: 0 },
+    { id: 'chat', label: 'Chat', badge: unreadChatCount },
   ];
 
   const activeMobileLabel =
@@ -3130,6 +4165,27 @@ export default function App() {
                           role="menuitem"
                           onClick={() => {
                             setIsProfileMenuOpen(false);
+                            setIsWorkstationFirstTime(false);
+                            setIsWorkstationModalOpen(true);
+                          }}
+                          className="w-full min-h-[40px] px-3 py-2 rounded-xl text-left text-xs font-semibold text-stone-700 dark:text-stone-200 hover:bg-stone-100 dark:hover:bg-[#172523] flex items-center justify-between gap-2 transition-colors cursor-pointer"
+                        >
+                          <span className="flex items-center gap-2.5">
+                            <MapPin className="w-4 h-4 text-teal-700 dark:text-teal-400" />
+                            <span>Department &amp; Desk</span>
+                          </span>
+                          <span className="text-[10px] font-medium text-stone-500 dark:text-stone-400 truncate max-w-[100px]">
+                            {currentUser.tableRow && currentUser.tableNumber
+                              ? `R${currentUser.tableRow}·T${currentUser.tableNumber}`
+                              : 'Set Location'}
+                          </span>
+                        </button>
+
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => {
+                            setIsProfileMenuOpen(false);
                             setIsSignInOpen(true);
                           }}
                           className="w-full min-h-[40px] px-3 py-2 rounded-xl text-left text-xs font-semibold text-stone-700 dark:text-stone-200 hover:bg-stone-100 dark:hover:bg-[#172523] flex items-center gap-2.5 transition-colors cursor-pointer"
@@ -3165,28 +4221,44 @@ export default function App() {
                   aria-hidden="true"
                 />
                 <div className="fixed sm:absolute right-3 sm:right-0 left-3 sm:left-auto top-[60px] sm:top-12 z-50 sm:w-96 rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] text-stone-900 dark:text-stone-100 shadow-2xl overflow-hidden">
-                  <div className="px-4 py-3 border-b border-stone-200 dark:border-stone-800 flex items-center justify-between bg-stone-50 dark:bg-[#172523]">
-                    <span className="text-xs font-bold text-stone-900 dark:text-stone-100">
-                      Notifications ({unreadNotifCount} unread)
-                    </span>
-                    <div className="flex items-center gap-3">
-                      {unreadNotifCount > 0 && (
-                        <button
-                          type="button"
-                          onClick={handleMarkAllNotificationsRead}
-                          className="text-xs font-semibold text-teal-700 dark:text-teal-400 hover:underline cursor-pointer"
-                        >
-                          Mark all read
-                        </button>
-                      )}
+                  <div className="px-4 py-3 border-b border-stone-200 dark:border-stone-800 bg-stone-50 dark:bg-[#172523] space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-bold text-stone-900 dark:text-stone-100 truncate tabular-nums">
+                        Notifications ({unreadNotifCount} unread)
+                      </span>
                       <button
                         type="button"
                         onClick={() => setIsNotifOpen(false)}
-                        className="text-xs text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-white cursor-pointer"
+                        className="text-xs font-medium text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-white whitespace-nowrap cursor-pointer"
                       >
                         Close
                       </button>
                     </div>
+                    {effectiveNotifications.length > 0 && (
+                      <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5">
+                        {unreadNotifCount > 0 ? (
+                          <button
+                            type="button"
+                            onClick={handleMarkAllNotificationsRead}
+                            className="px-2.5 py-1 rounded-lg border border-teal-200 dark:border-teal-800 bg-teal-50 dark:bg-teal-950/50 text-xs font-semibold text-teal-800 dark:text-teal-300 hover:bg-teal-100 dark:hover:bg-teal-900/50 whitespace-nowrap cursor-pointer"
+                          >
+                            Mark all read
+                          </button>
+                        ) : (
+                          <span className="text-[11px] text-stone-400 dark:text-stone-500">
+                            All caught up
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={handleDeleteAllNotifications}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-red-200 dark:border-red-800/80 bg-red-50 dark:bg-red-950/40 text-xs font-semibold text-red-700 dark:text-red-300 hover:bg-red-100 dark:hover:bg-red-900/50 whitespace-nowrap cursor-pointer"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                          <span>Delete all</span>
+                        </button>
+                      </div>
+                    )}
                   </div>
                   <div className="divide-y divide-stone-200 dark:divide-stone-800 max-h-80 overflow-y-auto">
                     {effectiveNotifications.length === 0 ? (
@@ -3195,56 +4267,97 @@ export default function App() {
                       </div>
                     ) : (
                       effectiveNotifications.map((n) => (
-                        <button
+                        <div
                           key={n.id}
-                          type="button"
-                          onClick={() => {
-                            handleMarkNotificationRead(n);
-                            if (n.type === 'delivery') {
-                              navigateTo(canViewDeliveryNav ? 'delivery' : 'ledger');
-                            } else if (n.type === 'payment') {
-                              if (n.targetUserId === 'admins' && isAdminOrSuper) {
-                                if (n.title.toLowerCase().includes('awaiting confirmation')) {
-                                  setRequestedAdminSubTab({ tab: 'salesOrder', nonce: Date.now() });
-                                } else {
-                                  setRequestedAdminSubTab({ tab: 'proofs', nonce: Date.now() });
-                                }
-                                navigateTo('admin');
-                              } else {
-                                navigateTo('ledger');
-                              }
-                            } else if (n.type === 'marketplace') {
-                              navigateTo(
-                                n.targetUserId === 'super_admin' &&
-                                  currentRole === UserRole.SuperAdmin
-                                  ? 'admin'
-                                  : 'community'
-                              );
-                            } else if (n.type === 'reminder') {
-                              navigateTo('ledger');
-                            } else if (n.type === 'ewallet') {
-                              navigateTo('ewallet');
-                            } else if (n.type === 'community') {
-                              navigateTo('community');
-                            } else if (n.type === 'chat') {
-                              navigateTo('chat');
-                            }
-                          }}
-                          className={`w-full text-left p-3.5 space-y-1 transition-colors hover:bg-stone-50 dark:hover:bg-[#172523] cursor-pointer ${
+                          className={`flex items-start justify-between gap-2.5 p-3.5 transition-colors hover:bg-stone-50 dark:hover:bg-[#172523] ${
                             !n.read
                               ? 'bg-teal-50/40 dark:bg-teal-950/35'
                               : 'bg-white dark:bg-[#121D1B]'
                           }`}
                         >
-                          <div className="flex items-center justify-between gap-2 text-xs">
-                            <span className="font-semibold text-stone-900 dark:text-stone-100">
-                              {!n.read ? 'New · ' : ''}
-                              {n.title}
-                            </span>
-                            <span className="text-stone-400 shrink-0">{n.timestamp}</span>
-                          </div>
-                          <p className="text-xs text-stone-600 dark:text-stone-400">{n.body}</p>
-                        </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              handleMarkNotificationRead(n);
+                              if (n.type === 'delivery') {
+                                navigateTo(canViewDeliveryNav ? 'delivery' : 'ledger');
+                              } else if (n.type === 'payment') {
+                                if (n.targetUserId === 'admins' && isAdminOrSuper) {
+                                  if (n.title.toLowerCase().includes('awaiting confirmation')) {
+                                    setRequestedAdminSubTab({ tab: 'salesOrder', nonce: Date.now() });
+                                  } else {
+                                    setRequestedAdminSubTab({ tab: 'proofs', nonce: Date.now() });
+                                  }
+                                  navigateTo('admin');
+                                } else {
+                                  navigateTo('ledger');
+                                }
+                              } else if (n.type === 'marketplace') {
+                                if (
+                                  (n.targetUserId === 'admins' ||
+                                    n.targetUserId === 'super_admin') &&
+                                  isAdminOrSuper
+                                ) {
+                                  setRequestedAdminSubTab({
+                                    tab: 'marketplace',
+                                    nonce: Date.now(),
+                                  });
+                                  navigateTo('admin');
+                                } else {
+                                  navigateTo('community');
+                                }
+                              } else if (n.type === 'reminder') {
+                                navigateTo('ledger');
+                              } else if (n.type === 'ewallet') {
+                                navigateTo('ewallet');
+                              } else if (n.type === 'community') {
+                                navigateTo('community');
+                              } else if (n.type === 'chat') {
+                                const senderMatch = allRegisteredCoworkers.find(
+                                  (c) =>
+                                    c.id !== currentUser.id &&
+                                    n.title.toLowerCase().includes(c.name.toLowerCase())
+                                );
+                                if (senderMatch) {
+                                  const matchedThread = threads.find(
+                                    (t) =>
+                                      t.type === 'dm' &&
+                                      t.participantIds.includes(currentUser.id) &&
+                                      t.participantIds.includes(senderMatch.id)
+                                  );
+                                  if (matchedThread) {
+                                    setRequestedChatThreadId({
+                                      threadId: matchedThread.id,
+                                      nonce: Date.now(),
+                                    });
+                                  }
+                                }
+                                navigateTo('chat');
+                              }
+                            }}
+                            className="flex-1 min-w-0 text-left space-y-1 cursor-pointer"
+                          >
+                            <div className="flex items-center justify-between gap-2 text-xs">
+                              <span className="font-semibold text-stone-900 dark:text-stone-100 truncate">
+                                {!n.read ? 'New · ' : ''}
+                                {n.title}
+                              </span>
+                              <span className="text-stone-400 shrink-0">{n.timestamp}</span>
+                            </div>
+                            <p className="text-xs text-stone-600 dark:text-stone-400">{n.body}</p>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteNotification(n)}
+                            aria-label={`Delete notification ${n.title}`}
+                            title="Delete notification"
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-stone-200 dark:border-stone-700 text-[11px] font-medium text-stone-600 dark:text-stone-300 hover:text-red-600 dark:hover:text-red-400 hover:border-red-300 dark:hover:border-red-800 hover:bg-red-50 dark:hover:bg-red-950/40 shrink-0 cursor-pointer"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            <span>Delete</span>
+                          </button>
+                        </div>
                       ))
                     )}
                   </div>
@@ -3334,7 +4447,11 @@ export default function App() {
               onBuyListing={handleBuyListing}
               onOpenSellerDashboard={() => navigateTo('seller')}
               sellerCollectablesTotal={sellerDebtSummary.collectablesTotal}
+              totalRegisteredUsers={allRegisteredCoworkers.length}
               openSellFormSignal={openCommunitySellSignal}
+              onDeleteSuggestion={handleDeleteSuggestion}
+              onAddSuggestionComment={handleAddSuggestionComment}
+              onUpdateSuggestionStatus={handleUpdateSuggestionStatus}
             />
           )}
 
@@ -3356,14 +4473,12 @@ export default function App() {
               }}
               onConfirmOrder={handleSellerConfirmOrder}
               onRejectOrder={handleSellerRejectOrder}
+              onMarkOrderDelivered={handleSellerMarkOrderDelivered}
               onReviewSellerProof={handleReviewSellerProof}
               onSendDebtReminder={handleSendSellerDebtReminder}
               onMarkOrderDebtSettled={handleMarkSellerOrderDebtSettled}
               onUpdateListingConfig={handleUpdateSellerListingConfig}
-              onDeleteListing={async (listingId) => {
-                setListings((prev) => prev.filter((l) => l.id !== listingId));
-                await removeMarketplaceListing(listingId);
-              }}
+              onDeleteListing={handleDeleteListing}
               onSaveSellerConfig={handleSaveSellerConfig}
             />
           )}
@@ -3466,6 +4581,7 @@ export default function App() {
                 void saveUserAccount(updated);
               }}
               onUpdateUserRole={(userId, role) => {
+                if (!isActualSuperAdmin) return;
                 const target = users.find((u) => u.id === userId);
                 if (!target) return;
                 const updated: UserAccount = { ...target, role };
@@ -3474,6 +4590,7 @@ export default function App() {
                 void saveUserAccount(updated);
               }}
               onAddDeliveryStaff={(name, email, department) => {
+                if (!isActualSuperAdmin) return;
                 const initials = name
                   .split(' ')
                   .map((p) => p[0])
@@ -3730,24 +4847,45 @@ export default function App() {
             />
           )}
 
+          {activeSection === 'developer' && isAdminOrSuper && (
+            <DeveloperSettingsView
+              currentRole={currentRole}
+              storeItems={items}
+              listings={listings}
+              proofs={proofs}
+              ewalletPosts={ewalletPosts}
+              apps={otherApps}
+              storeConfig={storeConfig}
+              onDeleteMediaAsset={handleDeleteMediaAsset}
+              onBulkDeleteMediaAssets={handleBulkDeleteMediaAssets}
+              onExitPreview={isPreviewingOtherRole ? () => setPreviewRole(null) : undefined}
+            />
+          )}
+
           {activeSection === 'chat' && (
             <ChatHubView
               threads={threads}
+              coworkers={allRegisteredCoworkers}
               currentUser={currentUser}
               currentRole={currentRole}
               storeItems={items}
               dueDays={pautanganSettings.dueDays}
               pendingProofsCount={pendingProofsCount}
+              requestedThreadId={requestedChatThreadId}
               onOpenSignIn={() => setIsSignInOpen(true)}
               onSendMessage={handleSendMessage}
               onReceiveAiReply={handleReceiveAiReply}
               onMarkThreadRead={handleMarkThreadRead}
+              onStartDirectChat={handleStartDirectChat}
+              onDeleteMessage={handleDeleteChatMessage}
+              onDeleteThread={handleDeleteChatThread}
             />
           )}
 
           {activeSection === 'apps' && (
             <OtherAppsView
               apps={otherApps}
+              currentRole={currentRole}
               onToggleInstallApp={(appId) => {
                 setOtherApps((prev) =>
                   prev.map((a) => (a.id === appId ? { ...a, installed: true } : a))
@@ -3756,6 +4894,8 @@ export default function App() {
                   void toggleInternalAppInstalled(appId, true);
                 }
               }}
+              onSaveApp={handleSaveInternalApp}
+              onDeleteApp={handleDeleteInternalApp}
             />
           )}
         </main>
@@ -3856,6 +4996,9 @@ export default function App() {
         storeItems={items}
         dueDays={pautanganSettings.dueDays}
         pendingProofsCount={pendingProofsCount}
+        aiThread={myPrivateAiThread}
+        onSendMessage={handleSendMessage}
+        onReceiveAiReply={handleReceiveAiReply}
       />
 
       {/* Modals & Offline Banner */}
@@ -3869,6 +5012,17 @@ export default function App() {
       />
 
       <QRShareModal isOpen={isQROpen} onClose={() => setIsQROpen(false)} />
+
+      {currentUser && (
+        <WorkstationSetupModal
+          isOpen={isWorkstationModalOpen}
+          isDark={darkMode}
+          currentUser={currentUser}
+          isFirstTimeSetup={isWorkstationFirstTime}
+          onClose={() => setIsWorkstationModalOpen(false)}
+          onSave={handleSaveWorkstationProfile}
+        />
+      )}
 
       <OfflineIndicator />
     </div>

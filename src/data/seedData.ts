@@ -818,24 +818,6 @@ export const INITIAL_LOANS: LoanRecord[] = [
 
 export const INITIAL_CHAT_THREADS: ChatThread[] = [
   {
-    id: 'thread-ai',
-    title: 'DeskPantry AI',
-    subtitle: 'Gemini Assistant · Store Stock & Ledger Help',
-    type: 'ai',
-    participantIds: ['ai'],
-    unreadCount: 0,
-    messages: [
-      {
-        id: 'm-ai-1',
-        senderId: 'ai',
-        senderName: 'DeskPantry AI',
-        senderRole: 'ai',
-        text: 'Kumusta! Ask me about current pantry stock, your 15th/30th store debt balance, payment proof uploads, or snack recommendations.',
-        timestamp: '09:00 AM',
-      },
-    ],
-  },
-  {
     id: 'thread-pantry',
     title: '#department-pantry',
     subtitle: 'All Coworkers · Restock & Merienda Alerts',

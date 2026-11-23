@@ -3,13 +3,17 @@ import {
   ArrowLeft,
   ArrowLeftRight,
   ArrowRight,
+  Camera,
   Check,
   CheckCircle2,
+  Clock3,
   Copy,
+  Lock,
   MessageSquare,
   Plus,
   Search,
   Send,
+  Trash2,
   Users,
   Wallet,
   X,
@@ -21,6 +25,19 @@ import {
 } from '../data/seedData';
 import { EWalletPost, UserAccount, UserRole } from '../types';
 import { formatPHP } from '../utils/format';
+import { compressImageFileToDataUrl } from '../utils/image';
+
+const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+function formatAutoDeleteRemaining(completedAtMs?: number): string {
+  if (!completedAtMs) return 'Auto-deletes 7d after completion';
+  const remainingMs = completedAtMs + ONE_WEEK_MS - Date.now();
+  if (remainingMs <= 0) return 'Scheduled for cleanup now';
+  const days = Math.floor(remainingMs / (24 * 60 * 60 * 1000));
+  const hours = Math.floor((remainingMs % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000));
+  if (days >= 1) return `Auto-deletes in ${days}d ${hours}h`;
+  return `Auto-deletes in ${Math.max(1, hours)}h`;
+}
 
 interface EWalletExchangeViewProps {
   posts: EWalletPost[];
@@ -36,7 +53,7 @@ interface EWalletExchangeViewProps {
     notes?: string;
   }) => void;
   onClaimShare: (postId: string, amount: number, note?: string) => void;
-  onAddComment: (postId: string, text: string) => void;
+  onAddComment: (postId: string, text: string, imageDataUrl?: string) => void;
 }
 
 const WALLET_OPTIONS = [
@@ -87,6 +104,8 @@ export const EWalletExchangeView: React.FC<EWalletExchangeViewProps> = ({
   const [claimAmount, setClaimAmount] = useState('');
   const [claimNote, setClaimNote] = useState('');
   const [commentText, setCommentText] = useState('');
+  const [commentImage, setCommentImage] = useState('');
+  const [previewCommentImg, setPreviewCommentImg] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [banner, setBanner] = useState('');
 
@@ -169,6 +188,7 @@ export const EWalletExchangeView: React.FC<EWalletExchangeViewProps> = ({
     setClaimAmount('');
     setClaimNote('');
     setCommentText('');
+    setCommentImage('');
   };
 
   const handleCreateSubmit = (e: React.FormEvent) => {
@@ -222,16 +242,21 @@ export const EWalletExchangeView: React.FC<EWalletExchangeViewProps> = ({
     );
   };
 
-  const handleCommentSubmit = (e: React.FormEvent, postId: string) => {
+  const handleCommentSubmit = (e: React.FormEvent, post: EWalletPost) => {
     e.preventDefault();
-    if (isGuest) {
+    if (isGuest || !currentUser) {
       onOpenSignIn();
       return;
     }
+    const canComment =
+      post.authorId === currentUser.id ||
+      post.fills.some((f) => f.userId === currentUser.id);
+    if (!canComment) return;
     const text = commentText.trim();
-    if (!text) return;
-    onAddComment(postId, text);
+    if (!text && !commentImage) return;
+    onAddComment(post.id, text || 'Attached image', commentImage || undefined);
     setCommentText('');
+    setCommentImage('');
   };
 
   return (
@@ -650,6 +675,12 @@ export const EWalletExchangeView: React.FC<EWalletExchangeViewProps> = ({
                         <span>{post.fills.length} joined</span>
                       </span>
                       <span className="font-mono">{progressPct}% filled</span>
+                      {isCompleted && (
+                        <span className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-300 font-medium">
+                          <Clock3 className="w-3 h-3" />
+                          <span>{formatAutoDeleteRemaining(post.completedAtMs)}</span>
+                        </span>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -975,68 +1006,196 @@ export const EWalletExchangeView: React.FC<EWalletExchangeViewProps> = ({
                   </div>
                 )}
 
-                {/* 6. Comments Under Order */}
-                <div className="rounded-xl border border-stone-200 dark:border-stone-800 bg-stone-50/70 dark:bg-[#0F1917] p-4 space-y-3">
-                  <div className="flex items-center gap-1.5 text-xs font-bold text-stone-800 dark:text-stone-200">
-                    <MessageSquare className="w-3.5 h-3.5 text-teal-700 dark:text-teal-400" />
-                    <span>Comments ({selectedPost.comments.length})</span>
-                  </div>
-
-                  {selectedPost.comments.length > 0 ? (
-                    <div className="space-y-2 max-h-52 overflow-y-auto pr-1">
-                      {selectedPost.comments.map((c) => (
-                        <div
-                          key={c.id}
-                          className="rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] px-3 py-2 space-y-0.5"
-                        >
-                          <div className="flex items-center justify-between gap-2 text-[11px]">
-                            <span className="font-bold text-stone-900 dark:text-stone-100">
-                              {c.userName}{' '}
-                              <span className="font-normal text-stone-500 dark:text-stone-400">
-                                ({c.userDepartment})
-                              </span>
-                            </span>
-                            <span className="text-stone-400 shrink-0">{c.createdAt}</span>
-                          </div>
-                          <p className="text-xs text-stone-700 dark:text-stone-300">{c.text}</p>
+                {/* 6. Comments Under Order (Post Owner & Share Buyers + Image Upload) */}
+                {(() => {
+                  const canComment = Boolean(
+                    currentUser &&
+                      (selectedPost.authorId === currentUser.id ||
+                        selectedPost.fills.some((f) => f.userId === currentUser.id))
+                  );
+                  return (
+                    <div className="rounded-xl border border-stone-200 dark:border-stone-800 bg-stone-50/70 dark:bg-[#0F1917] p-4 space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5 text-xs font-bold text-stone-800 dark:text-stone-200">
+                          <MessageSquare className="w-3.5 h-3.5 text-teal-700 dark:text-teal-400" />
+                          <span>Share Buyer Comments ({selectedPost.comments.length})</span>
                         </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="text-xs text-stone-500 dark:text-stone-400">
-                      No comments yet. Ask where to hand over cash or ask about partial amounts below!
-                    </p>
-                  )}
+                        {isCompleted && (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-700 dark:text-amber-300">
+                            <Clock3 className="w-3 h-3" />
+                            <span>{formatAutoDeleteRemaining(selectedPost.completedAtMs)}</span>
+                          </span>
+                        )}
+                      </div>
 
-                  <form
-                    onSubmit={(e) => handleCommentSubmit(e, selectedPost.id)}
-                    className="flex items-center gap-2"
-                  >
-                    <input
-                      type="text"
-                      value={commentText}
-                      onChange={(e) => setCommentText(e.target.value)}
-                      placeholder={
-                        isGuest
-                          ? 'Sign in to write a comment...'
-                          : 'Write a comment under this order...'
-                      }
-                      className="flex-1 min-h-[40px] rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-[#121D1B] px-3 text-xs text-stone-900 dark:text-stone-100 focus:border-teal-700 focus:outline-none"
-                    />
-                    <button
-                      type="submit"
-                      className="min-h-[40px] px-4 rounded-xl bg-stone-900 dark:bg-teal-700 text-xs font-semibold text-white hover:bg-stone-800 dark:hover:bg-teal-800 inline-flex items-center gap-1.5 shrink-0 cursor-pointer"
-                    >
-                      <Send className="w-3.5 h-3.5" />
-                      <span>{isGuest ? 'Sign In' : 'Send'}</span>
-                    </button>
-                  </form>
-                </div>
+                      {selectedPost.comments.length > 0 ? (
+                        <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                          {selectedPost.comments.map((c) => (
+                            <div
+                              key={c.id}
+                              className="rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] px-3 py-2.5 space-y-1.5"
+                            >
+                              <div className="flex items-center justify-between gap-2 text-[11px]">
+                                <span className="font-bold text-stone-900 dark:text-stone-100">
+                                  {c.userName}{' '}
+                                  <span className="font-normal text-stone-500 dark:text-stone-400">
+                                    ({c.userDepartment})
+                                  </span>
+                                </span>
+                                <span className="text-stone-400 shrink-0">{c.createdAt}</span>
+                              </div>
+                              <p className="text-xs text-stone-700 dark:text-stone-300">{c.text}</p>
+                              {c.imageDataUrl && (
+                                <button
+                                  type="button"
+                                  onClick={() => setPreviewCommentImg(c.imageDataUrl ?? null)}
+                                  className="mt-1 inline-block rounded-lg overflow-hidden border border-stone-200 dark:border-stone-700 hover:opacity-90 cursor-pointer"
+                                  title="Click to enlarge attached photo"
+                                >
+                                  <img
+                                    src={c.imageDataUrl}
+                                    alt={`Attachment from ${c.userName}`}
+                                    className="max-h-36 w-auto object-cover"
+                                  />
+                                </button>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-stone-500 dark:text-stone-400">
+                          No comments yet. Coworkers who buy a share can comment and attach transfer photos here.
+                        </p>
+                      )}
+
+                      {canComment ? (
+                        <form
+                          onSubmit={(e) => handleCommentSubmit(e, selectedPost)}
+                          className="space-y-2"
+                        >
+                          {commentImage && (
+                            <div className="inline-flex items-center gap-2 rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-[#121D1B] p-2">
+                              <button
+                                type="button"
+                                onClick={() => setPreviewCommentImg(commentImage)}
+                                className="rounded-lg overflow-hidden border border-stone-200 dark:border-stone-700 hover:opacity-90 transition-opacity cursor-pointer"
+                                title="Click to enlarge attached photo"
+                                aria-label="Preview comment image attachment"
+                              >
+                                <img
+                                  src={commentImage}
+                                  alt="Comment image preview"
+                                  className="w-12 h-12 object-cover"
+                                />
+                              </button>
+                              <span className="text-xs font-medium text-stone-700 dark:text-stone-200">
+                                Photo ready (click to preview)
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => setCommentImage('')}
+                                className="p-1.5 text-stone-400 hover:text-red-600 cursor-pointer"
+                                aria-label="Remove comment photo"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          )}
+
+                          <div className="flex items-center gap-2">
+                            <label
+                              className="min-h-[40px] px-3 rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-[#121D1B] text-xs font-semibold text-stone-700 dark:text-stone-200 hover:bg-stone-50 dark:hover:bg-[#172523] inline-flex items-center gap-1.5 shrink-0 cursor-pointer"
+                              title="Attach receipt or screenshot"
+                            >
+                              <Camera className="w-3.5 h-3.5 text-teal-700 dark:text-teal-400" />
+                              <span className="hidden sm:inline">Photo</span>
+                              <input
+                                type="file"
+                                accept="image/*"
+                                onChange={(e) => {
+                                  const f = e.target.files?.[0];
+                                  if (!f) return;
+                                  void compressImageFileToDataUrl(f, 720, 0.7).then((compressed) => {
+                                    setCommentImage(compressed);
+                                  });
+                                  e.target.value = '';
+                                }}
+                                className="hidden"
+                              />
+                            </label>
+                            <input
+                              type="text"
+                              value={commentText}
+                              onChange={(e) => setCommentText(e.target.value)}
+                              placeholder="Write a comment or transfer note..."
+                              className="flex-1 min-h-[40px] rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-[#121D1B] px-3 text-xs text-stone-900 dark:text-stone-100 focus:border-teal-700 focus:outline-none"
+                            />
+                            <button
+                              type="submit"
+                              disabled={!commentText.trim() && !commentImage}
+                              className="min-h-[40px] px-4 rounded-xl bg-stone-900 dark:bg-teal-700 text-xs font-semibold text-white hover:bg-stone-800 dark:hover:bg-teal-800 disabled:opacity-45 inline-flex items-center gap-1.5 shrink-0 cursor-pointer"
+                            >
+                              <Send className="w-3.5 h-3.5" />
+                              <span>Send</span>
+                            </button>
+                          </div>
+                        </form>
+                      ) : (
+                        <div className="rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] px-3.5 py-2.5 flex items-center justify-between gap-2 text-xs text-stone-600 dark:text-stone-300">
+                          <span className="inline-flex items-center gap-2">
+                            <Lock className="w-3.5 h-3.5 text-stone-400 shrink-0" />
+                            <span>
+                              {isGuest
+                                ? 'Sign in and buy a share on this order to comment or attach screenshots.'
+                                : 'Only the post owner and coworkers who bought a share on this order can comment or attach images.'}
+                            </span>
+                          </span>
+                          {isGuest && (
+                            <button
+                              type="button"
+                              onClick={onOpenSignIn}
+                              className="text-xs font-bold text-teal-700 dark:text-teal-400 hover:underline shrink-0 cursor-pointer"
+                            >
+                              Sign In
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             </div>
           </div>
         );
       })()}
+
+      {/* Enlarged Comment Image Lightbox */}
+      {previewCommentImg && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-stone-950/80 p-4 backdrop-blur-xs"
+          onClick={() => setPreviewCommentImg(null)}
+        >
+          <div
+            className="relative max-w-2xl max-h-[90vh] rounded-2xl overflow-hidden border border-stone-700 bg-stone-900 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              onClick={() => setPreviewCommentImg(null)}
+              className="absolute top-3 right-3 min-h-[36px] min-w-[36px] rounded-full bg-stone-950/70 text-white flex items-center justify-center hover:bg-stone-950 cursor-pointer"
+              aria-label="Close image preview"
+            >
+              <X className="w-4 h-4" />
+            </button>
+            <img
+              src={previewCommentImg}
+              alt="Full comment attachment"
+              className="max-h-[85vh] w-auto object-contain"
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -33,6 +33,7 @@ export function isOrderPendingSellerConfirmation(order: StoreOrder): boolean {
 }
 
 export function isApprovedDeliveryOrder(order: StoreOrder): boolean {
+  if (order.source === 'marketplace') return false;
   if (order.fulfillment !== FulfillmentType.Delivery) return false;
   if (
     order.status === 'Pending Admin Review' ||
@@ -50,6 +51,18 @@ export function isApprovedDeliveryOrder(order: StoreOrder): boolean {
     return false;
   }
   return true;
+}
+
+export function formatBuyerWorkstation(order: {
+  buyerDepartment?: string;
+  buyerTableRow?: string;
+  buyerTableNumber?: string;
+}): string {
+  const parts: string[] = [];
+  if (order.buyerDepartment?.trim()) parts.push(order.buyerDepartment.trim());
+  if (order.buyerTableRow?.trim()) parts.push(`Row ${order.buyerTableRow.trim()}`);
+  if (order.buyerTableNumber?.trim()) parts.push(`Table ${order.buyerTableNumber.trim()}`);
+  return parts.join(' · ');
 }
 
 export function getOrderItemsSubtotal(order: StoreOrder): number {

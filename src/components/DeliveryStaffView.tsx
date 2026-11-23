@@ -14,7 +14,7 @@ import {
   UserAccount,
   UserRole,
 } from '../types';
-import { formatPHP, isApprovedDeliveryOrder, isDateWithinPeriod } from '../utils/format';
+import { formatBuyerWorkstation, formatPHP, isApprovedDeliveryOrder, isDateWithinPeriod } from '../utils/format';
 
 interface DeliveryStaffViewProps {
   orders: StoreOrder[];
@@ -111,7 +111,7 @@ export const DeliveryStaffView: React.FC<DeliveryStaffViewProps> = ({
           Delivery Staff Access Required
         </h2>
         <p className="text-sm text-stone-600 dark:text-stone-400 max-w-md mx-auto">
-          Only Delivery Staff, Admin, or Super Admin accounts can manage desk delivery runs, counter pickups, and cash-on-delivery collections.
+          Only Delivery Staff, Admin, or Super Admin accounts can manage desk delivery runs, pick-up orders, and cash-on-delivery collections.
         </p>
         {onExitPreview && (
           <button
@@ -360,9 +360,18 @@ export const DeliveryStaffView: React.FC<DeliveryStaffViewProps> = ({
                     <span className="inline-flex items-center gap-1 font-medium text-stone-800 dark:text-stone-200">
                       <MapPin className="w-3.5 h-3.5 text-teal-700 dark:text-teal-400" />
                       {order.fulfillment === FulfillmentType.Delivery
-                        ? order.deliveryNote || 'Office Floor Delivery'
-                        : 'Pantry Counter B (Self-Pickup)'}
+                        ? formatBuyerWorkstation(order) || order.deliveryNote || 'Office Floor Delivery'
+                        : 'Pick Up'}
                     </span>
+                    {order.fulfillment === FulfillmentType.Delivery &&
+                      formatBuyerWorkstation(order) &&
+                      order.deliveryNote &&
+                      order.deliveryNote !== formatBuyerWorkstation(order) && (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <span>Note: {order.deliveryNote}</span>
+                        </>
+                      )}
                     <span aria-hidden="true">·</span>
                     <span>
                       Runner: <strong>{order.assignedRunner || 'Unassigned'}</strong>

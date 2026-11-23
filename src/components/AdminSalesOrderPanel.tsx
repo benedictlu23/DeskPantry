@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   Check,
@@ -27,11 +27,13 @@ import {
   UserAccount,
 } from '../types';
 import {
+  formatBuyerWorkstation,
   formatPHP,
   isOrderPendingAdminConfirmation,
   isOrderPendingSellerConfirmation,
 } from '../utils/format';
 import { BarcodeScannerModal } from './BarcodeScannerModal';
+import { ImagePreviewModal, ImagePreviewTarget } from './ImagePreviewModal';
 import { ProductImage } from './ProductImage';
 
 interface AdminSalesOrderPanelProps {
@@ -78,6 +80,12 @@ export const AdminSalesOrderPanel: React.FC<AdminSalesOrderPanelProps> = ({
   const [fulfillment, setFulfillment] = useState<FulfillmentType>(FulfillmentType.Pickup);
   const [deliveryNote, setDeliveryNote] = useState('');
 
+  useEffect(() => {
+    if (!storeConfig.deliveryEnabled && fulfillment === FulfillmentType.Delivery) {
+      setFulfillment(FulfillmentType.Pickup);
+    }
+  }, [storeConfig.deliveryEnabled, fulfillment]);
+
   const enabledMethods = useMemo(
     () => storeConfig.paymentMethods.filter((m) => m.enabled),
     [storeConfig.paymentMethods]
@@ -90,6 +98,7 @@ export const AdminSalesOrderPanel: React.FC<AdminSalesOrderPanelProps> = ({
   const [busyOrderId, setBusyOrderId] = useState<string | null>(null);
   const [recentFilter, setRecentFilter] = useState<'all' | 'walkin'>('all');
   const [lastCreatedOrder, setLastCreatedOrder] = useState<StoreOrder | null>(null);
+  const [previewImage, setPreviewImage] = useState<ImagePreviewTarget | null>(null);
 
   const categories = useMemo(
     () => ['All', ...storeConfig.categories],
@@ -251,6 +260,7 @@ export const AdminSalesOrderPanel: React.FC<AdminSalesOrderPanelProps> = ({
         (o) =>
           o.userId === 'walk-in' ||
           o.assignedRunner === 'Counter B Walk-in' ||
+          o.assignedRunner === 'Pick Up' ||
           o.logs?.some((lg) => lg.event.toLowerCase().includes('manual walk-in'))
       );
     }
@@ -263,7 +273,7 @@ export const AdminSalesOrderPanel: React.FC<AdminSalesOrderPanelProps> = ({
       await onApproveOrder(order.id);
       onNotifySuccess(
         order.fulfillment === FulfillmentType.Pickup
-          ? `Order ${order.id} approved & stock released (Counter B Pickup completed — not queued to Delivery Staff).`
+          ? `Order ${order.id} approved & stock released (Pick Up completed — not queued to Delivery Staff).`
           : `Order ${order.id} approved, stock released, and dispatched to Delivery Staff.`
       );
     } catch (err) {
@@ -363,7 +373,7 @@ export const AdminSalesOrderPanel: React.FC<AdminSalesOrderPanelProps> = ({
                         ) : (
                           <Truck className="w-3 h-3" />
                         )}
-                        {isPickup ? 'Pick Up at Counter B' : 'Desk Delivery'}
+                        {isPickup ? 'Pick Up' : 'Desk Delivery'}
                       </span>
                       <span className="text-stone-500 dark:text-stone-400">{ord.createdAt}</span>
                     </div>
@@ -399,19 +409,54 @@ export const AdminSalesOrderPanel: React.FC<AdminSalesOrderPanelProps> = ({
                       })}
                     </div>
 
-                    {ord.deliveryNote && (
-                      <div className="text-xs text-stone-600 dark:text-stone-400">
-                        Location Note: <strong className="text-stone-900 dark:text-stone-200">{ord.deliveryNote}</strong>
+                    {(formatBuyerWorkstation(ord) || ord.deliveryNote) && (
+                      <div className="text-xs text-stone-600 dark:text-stone-400 space-y-0.5">
+                        {formatBuyerWorkstation(ord) && (
+                          <div>
+                            Purchaser Desk:{' '}
+                            <strong className="text-stone-900 dark:text-stone-200">
+                              {formatBuyerWorkstation(ord)}
+                            </strong>
+                          </div>
+                        )}
+                        {ord.deliveryNote && ord.deliveryNote !== formatBuyerWorkstation(ord) && (
+                          <div>
+                            Location Note:{' '}
+                            <strong className="text-stone-900 dark:text-stone-200">
+                              {ord.deliveryNote}
+                            </strong>
+                          </div>
+                        )}
                       </div>
                     )}
 
                     {linkedProof && (
                       <div className="inline-flex items-center gap-3 rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-[#172523] p-2.5 text-xs">
-                        <img
-                          src={linkedProof.imageDataUrl}
-                          alt={`Proof ${linkedProof.referenceNo}`}
-                          className="w-11 h-11 rounded-lg object-cover border border-stone-200 dark:border-stone-700 shrink-0"
-                        />
+                        {linkedProof.imageDataUrl ? (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setPreviewImage({
+                                src: linkedProof.imageDataUrl,
+                                title: `${linkedProof.userName} · ${linkedProof.channel} Proof`,
+                                subtitle: `Order ${ord.id} · Ref: ${linkedProof.referenceNo} · ${formatPHP(linkedProof.amount, true)}`,
+                              })
+                            }
+                            className="rounded-lg overflow-hidden border border-stone-200 dark:border-stone-700 hover:opacity-90 transition-opacity shrink-0 cursor-pointer"
+                            title="Click to preview receipt image"
+                            aria-label={`Preview receipt ${linkedProof.referenceNo}`}
+                          >
+                            <img
+                              src={linkedProof.imageDataUrl}
+                              alt={`Proof ${linkedProof.referenceNo}`}
+                              className="w-11 h-11 object-cover"
+                            />
+                          </button>
+                        ) : (
+                          <div className="w-11 h-11 rounded-lg border border-dashed border-stone-300 dark:border-stone-700 bg-white dark:bg-[#121D1B] shrink-0 flex items-center justify-center text-[9px] font-semibold text-stone-400 text-center px-1">
+                            Cleared
+                          </div>
+                        )}
                         <div>
                           <div className="font-semibold text-stone-900 dark:text-stone-100">
                             {linkedProof.channel} Proof · Ref:{' '}
@@ -767,7 +812,7 @@ export const AdminSalesOrderPanel: React.FC<AdminSalesOrderPanelProps> = ({
                 onChange={(e) => setFulfillment(e.target.value as FulfillmentType)}
                 className="w-full min-h-[38px] rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-[#172523] px-2.5 text-xs font-semibold text-stone-900 dark:text-stone-100"
               >
-                <option value={FulfillmentType.Pickup}>Counter Pickup (₱0)</option>
+                <option value={FulfillmentType.Pickup}>Pick Up (₱0)</option>
                 {storeConfig.deliveryEnabled && (
                   <option value={FulfillmentType.Delivery}>
                     Desk Delivery (+{formatPHP(storeConfig.deliveryFee)})
@@ -935,7 +980,12 @@ export const AdminSalesOrderPanel: React.FC<AdminSalesOrderPanelProps> = ({
                     </div>
                   </td>
                   <td className="py-3 px-5 text-xs font-semibold text-stone-900 dark:text-stone-100">
-                    {o.userName}
+                    <div>{o.userName}</div>
+                    {formatBuyerWorkstation(o) && (
+                      <div className="text-[11px] font-normal text-stone-500 dark:text-stone-400">
+                        {formatBuyerWorkstation(o)}
+                      </div>
+                    )}
                   </td>
                   <td className="py-3 px-5 text-xs text-stone-600 dark:text-stone-300">
                     {o.items.map((i) => `${i.quantity}× ${i.name}`).join(', ')}
@@ -987,6 +1037,10 @@ export const AdminSalesOrderPanel: React.FC<AdminSalesOrderPanelProps> = ({
           handleBarcodeMatch(code);
         }}
         onClose={() => setIsScannerOpen(false)}
+      />
+      <ImagePreviewModal
+        preview={previewImage}
+        onClose={() => setPreviewImage(null)}
       />
     </div>
   );

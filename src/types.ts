@@ -34,6 +34,7 @@ export type ActiveSection =
   | 'delivery'
   | 'chat'
   | 'admin'
+  | 'developer'
   | 'apps';
 
 export interface UserAccount {
@@ -41,6 +42,8 @@ export interface UserAccount {
   name: string;
   email: string;
   department: string;
+  tableRow?: string;
+  tableNumber?: string;
   role: UserRole;
   debtBalance: number;
   pautanganEnabled: boolean;
@@ -110,6 +113,9 @@ export interface StoreOrder {
   id: string;
   userId: string;
   userName: string;
+  buyerDepartment?: string;
+  buyerTableRow?: string;
+  buyerTableNumber?: string;
   items: { itemId: string; name: string; quantity: number; unitPrice: number }[];
   totalAmount: number;
   deliveryFee?: number;
@@ -194,6 +200,25 @@ export interface PaymentProof {
   orderIds?: string[];
 }
 
+export interface CoworkerProfile {
+  id: string;
+  name: string;
+  department: string;
+  tableRow?: string;
+  tableNumber?: string;
+  avatarInitials: string;
+  avatarUrl?: string;
+}
+
+export interface SuggestionComment {
+  id: string;
+  userId: string;
+  userName: string;
+  userDepartment?: string;
+  text: string;
+  createdAt: string;
+}
+
 export interface SuggestionItem {
   id: string;
   title: string;
@@ -204,7 +229,11 @@ export interface SuggestionItem {
   createdAt: string;
   voterIds: string[];
   voterNames: string[];
+  downvoterIds?: string[];
+  downvoterNames?: string[];
   status: 'Open for Votes' | 'Reviewing' | 'Added to Pantry';
+  addedToStoreAt?: string;
+  comments?: SuggestionComment[];
 }
 
 export interface MarketplaceListing {
@@ -300,6 +329,7 @@ export interface ChatThread {
   type: 'ai' | 'channel' | 'dm';
   participantIds: string[];
   unreadCount: number;
+  unreadBy?: Record<string, number>;
   messages: ChatMessage[];
 }
 
@@ -333,6 +363,7 @@ export interface EWalletComment {
   userDepartment: string;
   text: string;
   createdAt: string;
+  imageDataUrl?: string;
 }
 
 export interface EWalletFill {
@@ -359,6 +390,7 @@ export interface EWalletPost {
   authorDepartment: string;
   createdAt: string;
   status: 'Open' | 'Partially Filled' | 'Completed';
+  completedAtMs?: number;
   fills: EWalletFill[];
   comments: EWalletComment[];
 }

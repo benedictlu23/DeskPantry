@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   CalendarClock,
   CheckCircle2,
@@ -14,7 +14,6 @@ import {
   Wallet,
   X,
 } from 'lucide-react';
-import { SAMPLE_RECEIPT_DATA_URL } from '../data/seedData';
 import {
   CartItem,
   FulfillmentType,
@@ -25,7 +24,8 @@ import {
   UserRole,
 } from '../types';
 import { formatPHP } from '../utils/format';
-import { compressImageFileToDataUrl } from '../utils/image';
+import { compressImageFileToDataUrl, isValidUploadedReceipt } from '../utils/image';
+import { ImagePreviewModal, ImagePreviewTarget } from './ImagePreviewModal';
 import { PaymentMethodCard } from './PaymentMethodCard';
 import { ProductImage } from './ProductImage';
 
@@ -52,6 +52,9 @@ interface StorefrontViewProps {
     proofChannel?: string;
     proofRef?: string;
     proofImage?: string;
+    buyerDepartment?: string;
+    buyerTableRow?: string;
+    buyerTableNumber?: string;
   }) => void;
   isCartOpen: boolean;
   setIsCartOpen: (open: boolean) => void;
@@ -81,6 +84,33 @@ export const StorefrontView: React.FC<StorefrontViewProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [fulfillment, setFulfillment] = useState<FulfillmentType>(FulfillmentType.Pickup);
   const [deliveryNote, setDeliveryNote] = useState('');
+  const [buyerDepartment, setBuyerDepartment] = useState('');
+  const [buyerTableRow, setBuyerTableRow] = useState('');
+  const [buyerTableNumber, setBuyerTableNumber] = useState('');
+
+  useEffect(() => {
+    const cleanDept =
+      currentUser?.department &&
+      currentUser.department !== 'Department Staff' &&
+      currentUser.department !== 'Unassigned'
+        ? currentUser.department
+        : '';
+    setBuyerDepartment(cleanDept);
+    setBuyerTableRow(currentUser?.tableRow || '');
+    setBuyerTableNumber(currentUser?.tableNumber || '');
+  }, [
+    currentUser?.id,
+    currentUser?.department,
+    currentUser?.tableRow,
+    currentUser?.tableNumber,
+    isCartOpen,
+  ]);
+
+  useEffect(() => {
+    if (!storeConfig.deliveryEnabled && fulfillment === FulfillmentType.Delivery) {
+      setFulfillment(FulfillmentType.Pickup);
+    }
+  }, [storeConfig.deliveryEnabled, fulfillment]);
 
   const enabledMethods = useMemo(
     () => storeConfig.paymentMethods.filter((m) => m.enabled),
@@ -94,6 +124,7 @@ export const StorefrontView: React.FC<StorefrontViewProps> = ({
   const [proofImage, setProofImage] = useState<string>('');
   const [checkoutError, setCheckoutError] = useState('');
   const [orderBanner, setOrderBanner] = useState('');
+  const [previewImage, setPreviewImage] = useState<ImagePreviewTarget | null>(null);
 
   const isGuest = currentRole === UserRole.Guest || !currentUser;
   const categoryList = useMemo(
@@ -146,8 +177,16 @@ export const StorefrontView: React.FC<StorefrontViewProps> = ({
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (!file.type.startsWith('image/') || file.type === 'image/svg+xml') {
+      setCheckoutError('Please upload a valid receipt photo or screenshot (PNG, JPG, or WebP).');
+      return;
+    }
     void compressImageFileToDataUrl(file)
       .then((compressed) => {
+        if (!isValidUploadedReceipt(compressed)) {
+          setCheckoutError('Please upload a valid payment receipt image.');
+          return;
+        }
         setProofImage(compressed);
         setCheckoutError('');
       })
@@ -165,14 +204,32 @@ export const StorefrontView: React.FC<StorefrontViewProps> = ({
     }
     if (cartDetails.length === 0 || !activePaymentMethod) return;
 
-    if (fulfillment === FulfillmentType.Delivery && !deliveryNote.trim()) {
+    const cleanDept = buyerDepartment.trim();
+    const cleanRow = buyerTableRow.trim();
+    const cleanTable = buyerTableNumber.trim();
+    const composedDeskLocation = [
+      cleanDept,
+      cleanRow ? `Row ${cleanRow}` : '',
+      cleanTable ? `Table ${cleanTable}` : '',
+    ]
+      .filter(Boolean)
+      .join(' · ');
+
+    if (!cleanDept || !cleanRow || !cleanTable) {
+      setCheckoutError(
+        'Enter your Department Name, Table Row, and Table Number so we know who and where to serve.'
+      );
+      return;
+    }
+
+    if (fulfillment === FulfillmentType.Delivery && !deliveryNote.trim() && !composedDeskLocation) {
       setCheckoutError('Add your desk location or floor for office delivery.');
       return;
     }
 
-    if (isDigitalWallet && !proofImage) {
+    if (isDigitalWallet && !isValidUploadedReceipt(proofImage)) {
       setCheckoutError(
-        `Upload your ${activePaymentMethod.title} payment screenshot for Admin confirmation.`
+        `Upload a valid ${activePaymentMethod.title} payment receipt image for Admin confirmation.`
       );
       return;
     }
@@ -184,11 +241,14 @@ export const StorefrontView: React.FC<StorefrontViewProps> = ({
 
     onPlaceOrder({
       fulfillment,
-      deliveryNote: deliveryNote.trim(),
+      deliveryNote: deliveryNote.trim() || composedDeskLocation,
       paymentMethod: activePaymentMethod.title,
       proofChannel: isDigitalWallet ? activePaymentMethod.title : undefined,
       proofRef: proofRef.trim(),
       proofImage,
+      buyerDepartment: cleanDept,
+      buyerTableRow: cleanRow,
+      buyerTableNumber: cleanTable,
     });
 
     setProofRef('');
@@ -656,7 +716,7 @@ export const StorefrontView: React.FC<StorefrontViewProps> = ({
                               }`}
                             >
                               {type === FulfillmentType.Pickup
-                                ? 'Pick Up at Counter B'
+                                ? 'Pick Up'
                                 : storeConfig.deliveryEnabled
                                   ? storeConfig.deliveryFee > 0
                                     ? `Deliver to Desk (+${formatPHP(storeConfig.deliveryFee)})`
@@ -668,16 +728,56 @@ export const StorefrontView: React.FC<StorefrontViewProps> = ({
                       </div>
                     </div>
 
+                    <div className="rounded-xl border border-stone-200 dark:border-stone-800 bg-stone-50 dark:bg-[#172523] p-3.5 space-y-2.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-semibold text-stone-700 dark:text-stone-200">
+                          Purchaser Department &amp; Desk Info
+                        </span>
+                        <span className="text-[11px] text-teal-700 dark:text-teal-400 font-medium">
+                          Auto-filled from profile
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        <input
+                          type="text"
+                          maxLength={120}
+                          value={buyerDepartment}
+                          onChange={(e) => setBuyerDepartment(e.target.value)}
+                          placeholder="Department Name"
+                          aria-label="Purchaser Department Name"
+                          className="sm:col-span-3 min-h-[38px] rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-[#111B19] px-3 py-1.5 text-xs text-stone-900 dark:text-stone-100 focus:border-teal-700 focus:outline-none"
+                        />
+                        <input
+                          type="text"
+                          maxLength={40}
+                          value={buyerTableRow}
+                          onChange={(e) => setBuyerTableRow(e.target.value)}
+                          placeholder="Table Row (e.g. B)"
+                          aria-label="Table Row"
+                          className="sm:col-span-1 min-h-[38px] rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-[#111B19] px-3 py-1.5 text-xs text-stone-900 dark:text-stone-100 focus:border-teal-700 focus:outline-none"
+                        />
+                        <input
+                          type="text"
+                          maxLength={40}
+                          value={buyerTableNumber}
+                          onChange={(e) => setBuyerTableNumber(e.target.value)}
+                          placeholder="Table No. (e.g. T-14)"
+                          aria-label="Table Number"
+                          className="sm:col-span-2 min-h-[38px] rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-[#111B19] px-3 py-1.5 text-xs text-stone-900 dark:text-stone-100 focus:border-teal-700 focus:outline-none"
+                        />
+                      </div>
+                    </div>
+
                     {fulfillment === FulfillmentType.Delivery && (
                       <div className="space-y-2">
                         <label className="block text-xs font-semibold text-stone-700 dark:text-stone-300">
-                          Where is your desk?
+                          Extra Delivery Note (Optional)
                         </label>
                         <input
                           type="text"
                           value={deliveryNote}
                           onChange={(e) => setDeliveryNote(e.target.value)}
-                          placeholder="e.g. 4th Floor · Desk 08"
+                          placeholder="e.g. Near pantry glass door or beside pillar"
                           className="w-full min-h-[44px] rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-[#172523] px-3 py-2 text-sm text-stone-900 dark:text-stone-100 focus:border-teal-700 focus:outline-none"
                         />
                         {storeConfig.deliveryFee > 0 && (
@@ -751,41 +851,40 @@ export const StorefrontView: React.FC<StorefrontViewProps> = ({
                               <span>Upload Receipt Image</span>
                               <input
                                 type="file"
-                                accept="image/*"
+                                accept="image/png,image/jpeg,image/webp,image/*"
                                 onChange={handleFileChange}
                                 className="hidden"
                               />
                             </label>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setProofImage(SAMPLE_RECEIPT_DATA_URL);
-                                if (!proofRef) {
-                                  setProofRef(
-                                    `${activePaymentMethod.title.slice(0, 2).toUpperCase()}-8849102`
-                                  );
-                                }
-                                setCheckoutError('');
-                              }}
-                              className="min-h-[40px] rounded-lg border border-teal-200 dark:border-teal-800 bg-white dark:bg-[#111B19] px-3 py-2 text-xs font-medium text-teal-800 dark:text-teal-300 hover:bg-teal-50 dark:hover:bg-teal-950/40 cursor-pointer"
-                            >
-                              Attach Sample Receipt
-                            </button>
                           </div>
 
                           {proofImage && (
                             <div className="flex items-center gap-3 rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-[#111B19] p-2">
-                              <img
-                                src={proofImage}
-                                alt="Uploaded payment proof preview"
-                                className="w-14 h-14 object-cover rounded-md border border-stone-200 dark:border-stone-700"
-                              />
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setPreviewImage({
+                                    src: proofImage,
+                                    title: `${activePaymentMethod.title} Payment Receipt`,
+                                    subtitle: proofRef.trim() ? `Ref: ${proofRef.trim()}` : 'Uploaded receipt preview',
+                                  })
+                                }
+                                className="rounded-md overflow-hidden border border-stone-200 dark:border-stone-700 hover:opacity-90 transition-opacity cursor-pointer shrink-0"
+                                title="Click to preview receipt image"
+                                aria-label="Preview uploaded payment receipt"
+                              >
+                                <img
+                                  src={proofImage}
+                                  alt="Uploaded payment proof preview"
+                                  className="w-14 h-14 object-cover"
+                                />
+                              </button>
                               <div className="flex-1 min-w-0">
                                 <div className="text-xs font-semibold text-stone-900 dark:text-stone-100">
-                                  Proof attached
+                                  Receipt attached
                                 </div>
                                 <div className="text-xs text-stone-500 dark:text-stone-400">
-                                  Pending manual Admin confirmation
+                                  Click thumbnail to preview · Pending Admin confirmation
                                 </div>
                               </div>
                               <button
@@ -853,6 +952,11 @@ export const StorefrontView: React.FC<StorefrontViewProps> = ({
           </div>
         </div>
       )}
+
+      <ImagePreviewModal
+        preview={previewImage}
+        onClose={() => setPreviewImage(null)}
+      />
     </div>
   );
 };

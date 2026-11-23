@@ -76,7 +76,7 @@ service cloud.firestore {
           'avatarInitials', 'totalSpent'
         ]) &&
         data.keys().hasOnly([
-          'id', 'name', 'email', 'department', 'role',
+          'id', 'name', 'email', 'department', 'tableRow', 'tableNumber', 'role',
           'debtBalance', 'pautanganEnabled', 'pautanganLimit',
           'avatarInitials', 'avatarUrl', 'totalSpent',
           'createdAt', 'updatedAt'
@@ -85,6 +85,8 @@ service cloud.firestore {
         data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
         data.email is string && data.email.size() >= 3 && data.email.size() <= 200 &&
         data.department is string && data.department.size() <= 120 &&
+        (!('tableRow' in data) || (data.tableRow is string && data.tableRow.size() <= 40)) &&
+        (!('tableNumber' in data) || (data.tableNumber is string && data.tableNumber.size() <= 40)) &&
         data.role in ['guest', 'member', 'delivery_staff', 'admin', 'super_admin'] &&
         data.debtBalance is number && data.debtBalance >= 0 &&
         data.pautanganEnabled is bool &&
@@ -98,10 +100,12 @@ service cloud.firestore {
 
     function isValidCoworkerProfile(data) {
       return data.keys().hasAll(['id', 'name', 'department', 'avatarInitials']) &&
-        data.keys().hasOnly(['id', 'name', 'department', 'avatarInitials', 'avatarUrl', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'name', 'department', 'tableRow', 'tableNumber', 'avatarInitials', 'avatarUrl', 'updatedAt']) &&
         isValidId(data.id) &&
         data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
         data.department is string && data.department.size() <= 120 &&
+        (!('tableRow' in data) || (data.tableRow is string && data.tableRow.size() <= 40)) &&
+        (!('tableNumber' in data) || (data.tableNumber is string && data.tableNumber.size() <= 40)) &&
         data.avatarInitials is string && data.avatarInitials.size() <= 6 &&
         (!('avatarUrl' in data) || (data.avatarUrl is string && data.avatarUrl.size() <= 1000)) &&
         (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 60));
@@ -203,7 +207,8 @@ service cloud.firestore {
           'orderDateIso', 'source', 'logs'
         ]) &&
         data.keys().hasOnly([
-          'id', 'userId', 'userName', 'items', 'totalAmount',
+          'id', 'userId', 'userName', 'buyerDepartment', 'buyerTableRow', 'buyerTableNumber',
+          'items', 'totalAmount',
           'deliveryFee', 'deliveryCommission', 'fulfillment', 'deliveryNote',
           'paymentMethod', 'status', 'deliveryStatus', 'assignedRunnerId',
           'assignedRunner', 'cashCollected', 'createdAt', 'orderDateIso',
@@ -214,6 +219,9 @@ service cloud.firestore {
         isValidId(data.id) &&
         isValidId(data.userId) &&
         data.userName is string && data.userName.size() >= 1 && data.userName.size() <= 120 &&
+        (!('buyerDepartment' in data) || (data.buyerDepartment is string && data.buyerDepartment.size() <= 120)) &&
+        (!('buyerTableRow' in data) || (data.buyerTableRow is string && data.buyerTableRow.size() <= 40)) &&
+        (!('buyerTableNumber' in data) || (data.buyerTableNumber is string && data.buyerTableNumber.size() <= 40)) &&
         data.items is list && data.items.size() <= 50 &&
         data.totalAmount is number && data.totalAmount >= 0 &&
         data.fulfillment in ['Pickup', 'Delivery'] &&
@@ -306,7 +314,9 @@ service cloud.firestore {
         ]) &&
         data.keys().hasOnly([
           'id', 'title', 'category', 'reason', 'requestedById',
-          'requestedByName', 'createdAt', 'voterIds', 'voterNames', 'status', 'updatedAt'
+          'requestedByName', 'createdAt', 'voterIds', 'voterNames',
+          'downvoterIds', 'downvoterNames', 'status',
+          'addedToStoreAt', 'comments', 'updatedAt'
         ]) &&
         isValidId(data.id) &&
         data.title is string && data.title.size() >= 1 && data.title.size() <= 140 &&
@@ -317,7 +327,11 @@ service cloud.firestore {
         data.createdAt is string && data.createdAt.size() <= 60 &&
         data.voterIds is list && data.voterIds.size() <= 200 &&
         data.voterNames is list && data.voterNames.size() <= 200 &&
+        (!('downvoterIds' in data) || (data.downvoterIds is list && data.downvoterIds.size() <= 200)) &&
+        (!('downvoterNames' in data) || (data.downvoterNames is list && data.downvoterNames.size() <= 200)) &&
         data.status in ['Open for Votes', 'Reviewing', 'Added to Pantry'] &&
+        (!('addedToStoreAt' in data) || (data.addedToStoreAt is string && data.addedToStoreAt.size() <= 80)) &&
+        (!('comments' in data) || (data.comments is list && data.comments.size() <= 200)) &&
         (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 60));
     }
 
@@ -385,7 +399,8 @@ service cloud.firestore {
         data.keys().hasOnly([
           'id', 'type', 'walletProvider', 'totalAmount', 'remainingAmount',
           'accountNumber', 'accountName', 'notes', 'authorId', 'authorName',
-          'authorDepartment', 'createdAt', 'status', 'fills', 'comments', 'updatedAt'
+          'authorDepartment', 'createdAt', 'status', 'completedAtMs',
+          'fills', 'comments', 'updatedAt'
         ]) &&
         isValidId(data.id) &&
         data.type in ['sell', 'buy'] &&
@@ -400,6 +415,7 @@ service cloud.firestore {
         data.authorDepartment is string && data.authorDepartment.size() <= 120 &&
         data.createdAt is string && data.createdAt.size() <= 60 &&
         data.status in ['Open', 'Partially Filled', 'Completed'] &&
+        (!('completedAtMs' in data) || (data.completedAtMs is number && data.completedAtMs > 0)) &&
         data.fills is list && data.fills.size() <= 100 &&
         data.comments is list && data.comments.size() <= 200 &&
         (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 60));
@@ -407,13 +423,14 @@ service cloud.firestore {
 
     function isValidChatThread(data) {
       return data.keys().hasAll(['id', 'title', 'subtitle', 'type', 'participantIds', 'unreadCount']) &&
-        data.keys().hasOnly(['id', 'title', 'subtitle', 'type', 'participantIds', 'unreadCount', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'title', 'subtitle', 'type', 'participantIds', 'unreadCount', 'unreadBy', 'updatedAt']) &&
         isValidId(data.id) &&
         data.title is string && data.title.size() >= 1 && data.title.size() <= 140 &&
         data.subtitle is string && data.subtitle.size() <= 200 &&
         data.type in ['ai', 'channel', 'dm'] &&
         data.participantIds is list && data.participantIds.size() <= 50 &&
         data.unreadCount is number && data.unreadCount >= 0 &&
+        (!('unreadBy' in data) || (data.unreadBy is map && data.unreadBy.size() <= 50)) &&
         (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 60));
     }
 
@@ -446,7 +463,7 @@ service cloud.firestore {
       return data.keys().hasAll(['id', 'name', 'tagline', 'description', 'platform', 'version', 'actionType', 'installed', 'image', 'url']) &&
         data.keys().hasOnly(['id', 'name', 'tagline', 'description', 'platform', 'version', 'actionType', 'installed', 'image', 'url']) &&
         isValidId(data.id) &&
-        data.name is string && data.name.size() <= 120 &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
         data.tagline is string && data.tagline.size() <= 200 &&
         data.description is string && data.description.size() <= 500 &&
         data.platform is string && data.platform.size() <= 80 &&
@@ -454,7 +471,8 @@ service cloud.firestore {
         data.actionType in ['open', 'install'] &&
         data.installed is bool &&
         data.image is string && data.image.size() <= 400000 &&
-        data.url is string && data.url.size() <= 500;
+        data.url is string && data.url.size() <= 500 &&
+        (data.url == '#' || data.url == '' || data.url.matches('^https?://.*'));
     }
 
     // Connection test document for startup validation
@@ -484,9 +502,16 @@ service cloud.firestore {
       allow update: if isValidId(userId) && isVerifiedUser() && isValidUserAccount(incoming()) && (
         // Super Admin can edit any user including roles, limits, and Pautangan access
         isSuperAdmin() ||
-        // Admin can update user balances, Pautangan limits/access, and profile info (cannot promote to super_admin)
-        (isAdmin() && incoming().role != 'super_admin') ||
-        // Owner updating only their own display name, department, initials, Gmail avatarUrl, or self-checkout debtBalance/totalSpent
+        // Admin can update coworker balances, Pautangan limits/access, and profile info (role changes reserved for Super Admin; Super Admin balance settlement allowed)
+        (
+          isAdmin() &&
+          incoming().role == existing().role &&
+          (
+            existing().role != 'super_admin' ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['debtBalance', 'totalSpent', 'updatedAt'])
+          )
+        ) ||
+        // Owner updating only their own display name, workstation location, initials, Gmail avatarUrl, or self-checkout debtBalance/totalSpent
         (
           isOwner(userId) &&
           incoming().id == existing().id &&
@@ -495,7 +520,10 @@ service cloud.firestore {
           incoming().pautanganEnabled == existing().pautanganEnabled &&
           incoming().pautanganLimit == existing().pautanganLimit &&
           (
-            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'department', 'avatarInitials', 'avatarUrl', 'updatedAt']) ||
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'name', 'department', 'tableRow', 'tableNumber',
+              'avatarInitials', 'avatarUrl', 'updatedAt'
+            ]) ||
             (
               incoming().diff(existing()).affectedKeys().hasOnly(['debtBalance', 'totalSpent', 'updatedAt']) &&
               incoming().debtBalance >= existing().debtBalance &&
@@ -576,10 +604,19 @@ service cloud.firestore {
       );
       allow update: if isValidId(orderId) && isVerifiedUser() && isValidOrder(incoming()) && (
         isAdmin() ||
-        (isDeliveryStaff() && incoming().diff(existing()).affectedKeys().hasOnly(['deliveryStatus', 'cashCollected', 'deliveredAt', 'assignedRunnerId', 'assignedRunner', 'logs', 'updatedAt'])) ||
+        (
+          isDeliveryStaff() &&
+          existing().source == 'store' &&
+          (incoming().status == existing().status || incoming().status in ['Confirmed', 'Completed']) &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'status', 'deliveryStatus', 'cashCollected', 'deliveredAt',
+            'assignedRunnerId', 'assignedRunner', 'logs', 'updatedAt'
+          ])
+        ) ||
         (
           'sellerId' in existing() &&
           existing().sellerId == request.auth.uid &&
+          existing().source == 'marketplace' &&
           incoming().sellerId == existing().sellerId &&
           incoming().userId == existing().userId &&
           incoming().totalAmount == existing().totalAmount &&
@@ -588,8 +625,10 @@ service cloud.firestore {
           (
             incoming().diff(existing()).affectedKeys().hasOnly(['debtSettled', 'debtPaidAmount', 'settledAt', 'logs', 'updatedAt']) ||
             (
-              existing().status == 'Pending Seller Confirmation' &&
-              incoming().status in ['Confirmed', 'Completed', 'Rejected'] &&
+              (
+                (existing().status == 'Pending Seller Confirmation' && incoming().status in ['Confirmed', 'Completed', 'Rejected']) ||
+                (existing().status == 'Confirmed' && incoming().status == 'Completed' && existing().fulfillment == 'Delivery')
+              ) &&
               incoming().diff(existing()).affectedKeys().hasOnly([
                 'status', 'deliveryStatus', 'assignedRunnerId', 'assignedRunner',
                 'deliveredAt', 'cashCollected', 'debtSettled', 'debtPaidAmount', 'settledAt', 'logs', 'updatedAt'
@@ -659,9 +698,12 @@ service cloud.firestore {
       );
       allow update: if isValidId(suggestionId) && isVerifiedUser() && isValidSuggestion(incoming()) && (
         isAdmin() ||
-        incoming().diff(existing()).affectedKeys().hasOnly(['voterIds', 'voterNames', 'updatedAt'])
+        incoming().diff(existing()).affectedKeys().hasOnly(['voterIds', 'voterNames', 'downvoterIds', 'downvoterNames', 'updatedAt']) ||
+        incoming().diff(existing()).affectedKeys().hasOnly(['comments', 'updatedAt'])
       );
-      allow delete: if isValidId(suggestionId) && isAdmin();
+      allow delete: if isValidId(suggestionId) && (
+        isAdmin() || (isVerifiedUser() && existing().requestedById == request.auth.uid)
+      );
     }
 
     // Coworker For-Sale Marketplace Listings
@@ -682,7 +724,7 @@ service cloud.firestore {
           incoming().commissionValue == existing().commissionValue &&
           incoming().soldCount >= existing().soldCount &&
           incoming().diff(existing()).affectedKeys().hasOnly([
-            'title', 'description', 'price', 'stock', 'soldCount',
+            'title', 'description', 'price', 'stock', 'soldCount', 'image',
             'paused', 'allowCash', 'allowDebt', 'pickupNote', 'paymentDetails', 'updatedAt'
           ])
         )
@@ -715,36 +757,86 @@ service cloud.firestore {
       allow update: if isValidId(postId) && isVerifiedUser() && isValidEWalletPost(incoming()) && (
         isAdmin() ||
         existing().authorId == request.auth.uid ||
-        incoming().diff(existing()).affectedKeys().hasOnly(['remainingAmount', 'status', 'fills', 'comments', 'updatedAt'])
+        incoming().diff(existing()).affectedKeys().hasOnly(['remainingAmount', 'status', 'completedAtMs', 'fills', 'comments', 'updatedAt'])
       );
-      allow delete: if isValidId(postId) && isAdmin();
+      allow delete: if isValidId(postId) && (
+        isAdmin() ||
+        (
+          isVerifiedUser() &&
+          existing().status == 'Completed' &&
+          'completedAtMs' in existing() &&
+          existing().completedAtMs is number &&
+          request.time.toMillis() >= existing().completedAtMs + 604800000
+        )
+      );
     }
 
     // Chat Threads & Messages Subcollection
     match /chatThreads/{threadId} {
-      allow get: if isValidId(threadId) && (isSuperAdmin() || (isVerifiedUser() && (existing().type == 'ai' || existing().type == 'channel' || request.auth.uid in existing().participantIds)));
-      allow list: if isSuperAdmin() || (isVerifiedUser() && (resource.data.type == 'ai' || resource.data.type == 'channel' || request.auth.uid in resource.data.participantIds));
-      allow create: if isValidId(threadId) && isVerifiedUser() && isValidChatThread(incoming());
-      allow update: if isValidId(threadId) && isVerifiedUser() && isValidChatThread(incoming()) && (
-        isAdmin() || incoming().diff(existing()).affectedKeys().hasOnly(['unreadCount', 'updatedAt'])
+      allow get: if isValidId(threadId) && (
+        isSuperAdmin() ||
+        (isVerifiedUser() && (
+          resource == null ||
+          existing().type == 'channel' ||
+          ('participantIds' in existing() && request.auth.uid in existing().participantIds)
+        ))
       );
-      allow delete: if isValidId(threadId) && isSuperAdmin();
+      allow list: if isSuperAdmin() || (
+        isVerifiedUser() && (resource.data.type == 'channel' || request.auth.uid in resource.data.participantIds)
+      );
+      allow create: if isValidId(threadId) && isVerifiedUser() && isValidChatThread(incoming()) && (
+        (isAdmin() && incoming().type != 'ai') ||
+        (incoming().type == 'dm' && 'participantIds' in incoming() && request.auth.uid in incoming().participantIds) ||
+        (incoming().type == 'ai' && incoming().id == 'ai-' + request.auth.uid && 'participantIds' in incoming() && incoming().participantIds.size() == 1 && request.auth.uid in incoming().participantIds)
+      );
+      allow update: if isValidId(threadId) && isVerifiedUser() && isValidChatThread(incoming()) && (
+        (isAdmin() && existing().type != 'ai') ||
+        (
+          (
+            existing().type == 'channel' ||
+            ('participantIds' in existing() && request.auth.uid in existing().participantIds)
+          ) &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['unreadCount', 'unreadBy', 'updatedAt'])
+        )
+      );
+      allow delete: if isValidId(threadId) && (
+        isSuperAdmin() ||
+        (isVerifiedUser() && existing().type in ['dm', 'ai'] && 'participantIds' in existing() && request.auth.uid in existing().participantIds)
+      );
 
       match /messages/{messageId} {
         allow get, list: if isValidId(threadId) && (
           isSuperAdmin() ||
           (isVerifiedUser() && (
-            get(/databases/$(database)/documents/chatThreads/$(threadId)).data.type == 'ai' ||
             get(/databases/$(database)/documents/chatThreads/$(threadId)).data.type == 'channel' ||
             request.auth.uid in get(/databases/$(database)/documents/chatThreads/$(threadId)).data.participantIds
           ))
         );
         allow create: if isValidId(threadId) && isValidId(messageId) && isVerifiedUser() && isValidChatMessage(incoming()) && (
-          isAdmin() ||
-          incoming().senderId == request.auth.uid ||
-          (incoming().senderId == 'ai' && incoming().senderRole == 'ai')
+          (
+            isAdmin() &&
+            get(/databases/$(database)/documents/chatThreads/$(threadId)).data.type != 'ai'
+          ) ||
+          (
+            (
+              get(/databases/$(database)/documents/chatThreads/$(threadId)).data.type == 'channel' ||
+              request.auth.uid in get(/databases/$(database)/documents/chatThreads/$(threadId)).data.participantIds
+            ) &&
+            (
+              incoming().senderId == request.auth.uid ||
+              (incoming().senderId == 'ai' && incoming().senderRole == 'ai')
+            )
+          )
         );
-        allow delete: if isValidId(threadId) && isValidId(messageId) && isSuperAdmin();
+        allow delete: if isValidId(threadId) && isValidId(messageId) && (
+          isSuperAdmin() ||
+          (isVerifiedUser() && existing().senderId == request.auth.uid) ||
+          (
+            isVerifiedUser() &&
+            get(/databases/$(database)/documents/chatThreads/$(threadId)).data.type in ['dm', 'ai'] &&
+            request.auth.uid in get(/databases/$(database)/documents/chatThreads/$(threadId)).data.participantIds
+          )
+        );
       }
     }
 
@@ -772,7 +864,11 @@ service cloud.firestore {
         (existing().targetUserId == 'super_admin' && isSuperAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['read'])) ||
         isSuperAdmin()
       );
-      allow delete: if isValidId(notificationId) && isAdmin();
+      allow delete: if isValidId(notificationId) && (
+        isAdmin() ||
+        (isVerifiedUser() && existing().targetUserId == request.auth.uid) ||
+        (isDeliveryStaff() && existing().targetUserId == 'delivery')
+      );
     }
 
     // Internal Companion Apps Directory

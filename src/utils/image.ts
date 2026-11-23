@@ -50,3 +50,19 @@ export function compressImageFileToDataUrl(
     reader.readAsDataURL(file);
   });
 }
+
+/**
+ * Validates that an attached payment receipt is a genuine uploaded image
+ * (JPEG, PNG, WebP, etc.) and not empty or a hardcoded sample SVG receipt.
+ */
+export function isValidUploadedReceipt(value: string | undefined | null): boolean {
+  const trimmed = (value ?? '').trim();
+  if (!trimmed) return false;
+  if (trimmed.startsWith('data:image/svg+xml')) return false;
+  if (trimmed.includes('DeskPantry Demo Receipt')) return false;
+  return (
+    (trimmed.startsWith('data:image/') && trimmed.includes(';base64,')) ||
+    trimmed.startsWith('https://')
+  );
+}
+

@@ -9,6 +9,8 @@
         "name": { "type": "string", "minLength": 1, "maxLength": 120 },
         "email": { "type": "string", "format": "email", "maxLength": 200 },
         "department": { "type": "string", "maxLength": 120 },
+        "tableRow": { "type": "string", "maxLength": 40 },
+        "tableNumber": { "type": "string", "maxLength": 40 },
         "role": { "type": "string", "enum": ["guest", "member", "delivery_staff", "admin", "super_admin"] },
         "debtBalance": { "type": "number" },
         "pautanganEnabled": { "type": "boolean" },
@@ -23,12 +25,14 @@
     },
     "CoworkerProfile": {
       "title": "CoworkerProfile",
-      "description": "Non-PII coworker display profile (name, department, avatar) readable by signed-in coworkers for chat and marketplace display.",
+      "description": "Non-PII coworker display profile (name, department, desk location, avatar) readable by signed-in coworkers for chat and marketplace display.",
       "type": "object",
       "properties": {
         "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "name": { "type": "string", "minLength": 1, "maxLength": 120 },
         "department": { "type": "string", "maxLength": 120 },
+        "tableRow": { "type": "string", "maxLength": 40 },
+        "tableNumber": { "type": "string", "maxLength": 40 },
         "avatarInitials": { "type": "string", "maxLength": 6 },
         "avatarUrl": { "type": "string", "maxLength": 1000 },
         "updatedAt": { "type": "string", "format": "date-time" }
@@ -118,6 +122,9 @@
         "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "userName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "buyerDepartment": { "type": "string", "maxLength": 120 },
+        "buyerTableRow": { "type": "string", "maxLength": 40 },
+        "buyerTableNumber": { "type": "string", "maxLength": 40 },
         "items": { "type": "array" },
         "totalAmount": { "type": "number" },
         "deliveryFee": { "type": "number" },
@@ -196,7 +203,7 @@
     },
     "SuggestionItem": {
       "title": "SuggestionItem",
-      "description": "Coworker snack/product suggestion with upvote tracking.",
+      "description": "Coworker snack/product suggestion with upvote and downvote tracking.",
       "type": "object",
       "properties": {
         "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
@@ -208,7 +215,11 @@
         "createdAt": { "type": "string", "maxLength": 60 },
         "voterIds": { "type": "array" },
         "voterNames": { "type": "array" },
+        "downvoterIds": { "type": "array" },
+        "downvoterNames": { "type": "array" },
         "status": { "type": "string", "enum": ["Open for Votes", "Reviewing", "Added to Pantry"] },
+        "addedToStoreAt": { "type": "string", "maxLength": 80 },
+        "comments": { "type": "array" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "title", "category", "reason", "requestedById", "requestedByName", "createdAt", "voterIds", "voterNames", "status"]
@@ -277,6 +288,7 @@
         "authorDepartment": { "type": "string", "maxLength": 120 },
         "createdAt": { "type": "string", "maxLength": 60 },
         "status": { "type": "string", "enum": ["Open", "Partially Filled", "Completed"] },
+        "completedAtMs": { "type": "number" },
         "fills": { "type": "array" },
         "comments": { "type": "array" },
         "updatedAt": { "type": "string", "format": "date-time" }
@@ -294,6 +306,7 @@
         "type": { "type": "string", "enum": ["ai", "channel", "dm"] },
         "participantIds": { "type": "array" },
         "unreadCount": { "type": "number" },
+        "unreadBy": { "type": "object" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "title", "subtitle", "type", "participantIds", "unreadCount"]
