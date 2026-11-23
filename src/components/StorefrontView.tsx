@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import {
   CalendarClock,
   CheckCircle2,
+  ClipboardList,
   Minus,
   PackageCheck,
   Plus,
@@ -30,6 +31,7 @@ import { ProductImage } from './ProductImage';
 
 interface StorefrontViewProps {
   items: StoreItem[];
+  isLoading?: boolean;
   cart: CartItem[];
   currentUser: UserAccount | null;
   currentRole: UserRole;
@@ -41,6 +43,8 @@ interface StorefrontViewProps {
   onClearCart: () => void;
   onOpenSignIn: () => void;
   onOpenQRShare: () => void;
+  onOpenSalesOrder?: () => void;
+  pendingOrdersCount?: number;
   onPlaceOrder: (payload: {
     fulfillment: FulfillmentType;
     deliveryNote: string;
@@ -55,6 +59,7 @@ interface StorefrontViewProps {
 
 export const StorefrontView: React.FC<StorefrontViewProps> = ({
   items,
+  isLoading = false,
   cart,
   currentUser,
   currentRole,
@@ -66,6 +71,8 @@ export const StorefrontView: React.FC<StorefrontViewProps> = ({
   onClearCart,
   onOpenSignIn,
   onOpenQRShare,
+  onOpenSalesOrder,
+  pendingOrdersCount = 0,
   onPlaceOrder,
   isCartOpen,
   setIsCartOpen,
@@ -191,10 +198,10 @@ export const StorefrontView: React.FC<StorefrontViewProps> = ({
     setIsCartOpen(false);
     setOrderBanner(
       isDigitalWallet
-        ? `Order placed with ${activePaymentMethod.title}. Your proof of payment is queued for Admin confirmation.`
-        : `Order confirmed via ${activePaymentMethod.title} (${fulfillment}).`
+        ? `Order placed with ${activePaymentMethod.title} (${fulfillment}). Queued on Sales Order for Admin payment & stock release approval.`
+        : `Order (${activePaymentMethod.title} · ${fulfillment}) submitted and waiting on Sales Order for Admin confirmation & stock release.`
     );
-    setTimeout(() => setOrderBanner(''), 5500);
+    setTimeout(() => setOrderBanner(''), 6000);
   };
 
   return (
@@ -249,6 +256,22 @@ export const StorefrontView: React.FC<StorefrontViewProps> = ({
               </button>
             )}
 
+            {onOpenSalesOrder && (
+              <button
+                type="button"
+                onClick={onOpenSalesOrder}
+                className="min-h-[44px] inline-flex items-center justify-center gap-2 rounded-xl border border-teal-200 dark:border-teal-800 bg-teal-50/80 dark:bg-teal-950/50 px-3.5 py-2.5 text-xs sm:text-sm font-semibold text-teal-800 dark:text-teal-200 hover:bg-teal-100 dark:hover:bg-teal-900/60 transition-colors cursor-pointer"
+              >
+                <ClipboardList className="w-4 h-4 text-teal-700 dark:text-teal-400" />
+                <span>Sales Order</span>
+                {pendingOrdersCount > 0 && (
+                  <span className="min-w-[20px] h-5 px-1.5 rounded-full bg-amber-500 text-stone-950 text-[10px] font-extrabold inline-flex items-center justify-center tabular-nums">
+                    {pendingOrdersCount}
+                  </span>
+                )}
+              </button>
+            )}
+
             <button
               type="button"
               onClick={onOpenQRShare}
@@ -272,10 +295,10 @@ export const StorefrontView: React.FC<StorefrontViewProps> = ({
                 Available Items (SKUs)
               </div>
               <div className="mt-0.5 text-xl sm:text-2xl font-extrabold text-stone-900 dark:text-stone-100 tabular-nums">
-                {items.filter((i) => i.stock > 0).length} Ready
+                {isLoading ? 'Loading...' : `${items.filter((i) => i.stock > 0).length} Ready`}
               </div>
               <div className="text-xs text-stone-600 dark:text-stone-400">
-                In stock on the shelf today
+                {isLoading ? 'Syncing your live inventory' : 'In stock on the shelf today'}
               </div>
             </div>
           </div>
@@ -390,7 +413,27 @@ export const StorefrontView: React.FC<StorefrontViewProps> = ({
         </div>
 
         {/* Product Grid */}
-        {filteredItems.length === 0 ? (
+        {isLoading ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+            {Array.from({ length: 6 }).map((_, idx) => (
+              <div
+                key={`skel-${idx}`}
+                className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] overflow-hidden animate-pulse"
+              >
+                <div className="aspect-[4/3] w-full bg-stone-200/80 dark:bg-stone-800/80" />
+                <div className="p-4 sm:p-5 space-y-3">
+                  <div className="h-3 w-28 rounded bg-stone-200 dark:bg-stone-800" />
+                  <div className="h-5 w-3/4 rounded bg-stone-200 dark:bg-stone-800" />
+                  <div className="h-4 w-full rounded bg-stone-100 dark:bg-stone-800/70" />
+                  <div className="pt-2 flex items-center justify-between">
+                    <div className="h-6 w-16 rounded bg-stone-200 dark:bg-stone-800" />
+                    <div className="h-10 w-24 rounded-xl bg-stone-200 dark:bg-stone-800" />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : filteredItems.length === 0 ? (
           <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] p-10 text-center">
             <p className="text-sm font-semibold text-stone-900 dark:text-stone-100">
               No items found.
@@ -802,7 +845,7 @@ export const StorefrontView: React.FC<StorefrontViewProps> = ({
                       ? 'Sign In to Checkout'
                       : isDigitalWallet && activePaymentMethod
                         ? `Submit ${activePaymentMethod.title} Order & Proof`
-                        : `Confirm ${activePaymentMethod?.title ?? 'Order'}`}
+                        : `Place ${activePaymentMethod?.title ?? 'Order'}`}
                   </button>
                 </div>
               </div>

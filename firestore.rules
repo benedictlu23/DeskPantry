@@ -208,6 +208,7 @@ service cloud.firestore {
           'paymentMethod', 'status', 'deliveryStatus', 'assignedRunnerId',
           'assignedRunner', 'cashCollected', 'createdAt', 'orderDateIso',
           'deliveredAt', 'dueDateLabel', 'source', 'commissionEarned',
+          'sellerId', 'sellerName', 'debtSettled', 'debtPaidAmount', 'settledAt',
           'logs', 'updatedAt'
         ]) &&
         isValidId(data.id) &&
@@ -217,7 +218,7 @@ service cloud.firestore {
         data.totalAmount is number && data.totalAmount >= 0 &&
         data.fulfillment in ['Pickup', 'Delivery'] &&
         data.paymentMethod is string && data.paymentMethod.size() >= 1 && data.paymentMethod.size() <= 80 &&
-        data.status in ['Confirmed', 'Pending Payment Proof', 'Completed'] &&
+        data.status in ['Confirmed', 'Pending Payment Proof', 'Completed', 'Pending Admin Review', 'Pending Seller Confirmation', 'Rejected'] &&
         data.createdAt is string && data.createdAt.size() <= 80 &&
         data.orderDateIso is string && data.orderDateIso.size() <= 40 &&
         data.source in ['store', 'marketplace'] &&
@@ -225,13 +226,18 @@ service cloud.firestore {
         (!('deliveryFee' in data) || data.deliveryFee is number) &&
         (!('deliveryCommission' in data) || data.deliveryCommission is number) &&
         (!('deliveryNote' in data) || (data.deliveryNote is string && data.deliveryNote.size() <= 300)) &&
-        (!('deliveryStatus' in data) || data.deliveryStatus in ['Pending Dispatch', 'Out for Delivery', 'Delivered']) &&
+        (!('deliveryStatus' in data) || data.deliveryStatus in ['Pending Dispatch', 'Out for Delivery', 'Delivered', 'Pending Admin Approval', 'Pending Seller Approval', 'Cancelled']) &&
         (!('assignedRunnerId' in data) || (data.assignedRunnerId is string && data.assignedRunnerId.size() <= 128)) &&
         (!('assignedRunner' in data) || (data.assignedRunner is string && data.assignedRunner.size() <= 120)) &&
         (!('cashCollected' in data) || data.cashCollected is bool) &&
         (!('deliveredAt' in data) || (data.deliveredAt is string && data.deliveredAt.size() <= 80)) &&
         (!('dueDateLabel' in data) || (data.dueDateLabel is string && data.dueDateLabel.size() <= 80)) &&
         (!('commissionEarned' in data) || data.commissionEarned is number) &&
+        (!('sellerId' in data) || isValidId(data.sellerId)) &&
+        (!('sellerName' in data) || (data.sellerName is string && data.sellerName.size() <= 120)) &&
+        (!('debtSettled' in data) || data.debtSettled is bool) &&
+        (!('debtPaidAmount' in data) || (data.debtPaidAmount is number && data.debtPaidAmount >= 0)) &&
+        (!('settledAt' in data) || (data.settledAt is string && data.settledAt.size() <= 80)) &&
         (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 60));
     }
 
@@ -243,7 +249,8 @@ service cloud.firestore {
         data.keys().hasOnly([
           'id', 'userId', 'userName', 'amount', 'channel',
           'referenceNo', 'purpose', 'imageDataUrl', 'submittedAt', 'status',
-          'reviewedBy', 'reviewedAt', 'orderId', 'loanId', 'updatedAt'
+          'reviewedBy', 'reviewedAt', 'orderId', 'loanId',
+          'sellerId', 'sellerName', 'orderIds', 'updatedAt'
         ]) &&
         isValidId(data.id) &&
         isValidId(data.userId) &&
@@ -251,7 +258,7 @@ service cloud.firestore {
         data.amount is number && data.amount > 0 &&
         data.channel is string && data.channel.size() >= 1 && data.channel.size() <= 60 &&
         data.referenceNo is string && data.referenceNo.size() >= 1 && data.referenceNo.size() <= 100 &&
-        data.purpose in ['Store Debt Settlement', 'Order Payment', 'Pautangan Repayment'] &&
+        data.purpose in ['Store Debt Settlement', 'Order Payment', 'Pautangan Repayment', 'Community Seller Settlement'] &&
         data.imageDataUrl is string && data.imageDataUrl.size() <= 400000 &&
         data.submittedAt is string && data.submittedAt.size() <= 80 &&
         data.status in ['pending', 'approved', 'rejected'] &&
@@ -259,6 +266,9 @@ service cloud.firestore {
         (!('reviewedAt' in data) || (data.reviewedAt is string && data.reviewedAt.size() <= 80)) &&
         (!('orderId' in data) || (data.orderId is string && data.orderId.size() <= 128)) &&
         (!('loanId' in data) || (data.loanId is string && data.loanId.size() <= 128)) &&
+        (!('sellerId' in data) || isValidId(data.sellerId)) &&
+        (!('sellerName' in data) || (data.sellerName is string && data.sellerName.size() <= 120)) &&
+        (!('orderIds' in data) || (data.orderIds is list && data.orderIds.size() <= 50)) &&
         (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 60));
     }
 
@@ -320,7 +330,8 @@ service cloud.firestore {
         data.keys().hasOnly([
           'id', 'sellerId', 'sellerName', 'sellerDepartment', 'title',
           'description', 'price', 'stock', 'soldCount', 'commissionType',
-          'commissionValue', 'approvalStatus', 'createdAt', 'image', 'updatedAt'
+          'commissionValue', 'approvalStatus', 'createdAt', 'image',
+          'paused', 'allowCash', 'allowDebt', 'pickupNote', 'paymentDetails', 'updatedAt'
         ]) &&
         isValidId(data.id) &&
         isValidId(data.sellerId) &&
@@ -336,6 +347,32 @@ service cloud.firestore {
         data.approvalStatus in ['pending', 'approved', 'rejected'] &&
         data.createdAt is string && data.createdAt.size() <= 60 &&
         (!('image' in data) || (data.image is string && data.image.size() <= 400000)) &&
+        (!('paused' in data) || data.paused is bool) &&
+        (!('allowCash' in data) || data.allowCash is bool) &&
+        (!('allowDebt' in data) || data.allowDebt is bool) &&
+        (!('pickupNote' in data) || (data.pickupNote is string && data.pickupNote.size() <= 200)) &&
+        (!('paymentDetails' in data) || (data.paymentDetails is string && data.paymentDetails.size() <= 200)) &&
+        (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 60));
+    }
+
+    function isValidSellerConfig(data) {
+      return data.keys().hasAll([
+          'userId', 'defaultReminderTemplate', 'defaultAllowCash', 'defaultAllowDebt'
+        ]) &&
+        data.keys().hasOnly([
+          'userId', 'gcashNumber', 'mayaNumber', 'paymentNotes',
+          'defaultPickupNote', 'defaultReminderTemplate', 'defaultAllowCash',
+          'defaultAllowDebt', 'notifyOnNewSale', 'updatedAt'
+        ]) &&
+        isValidId(data.userId) &&
+        data.defaultReminderTemplate is string && data.defaultReminderTemplate.size() <= 300 &&
+        data.defaultAllowCash is bool &&
+        data.defaultAllowDebt is bool &&
+        (!('gcashNumber' in data) || (data.gcashNumber is string && data.gcashNumber.size() <= 60)) &&
+        (!('mayaNumber' in data) || (data.mayaNumber is string && data.mayaNumber.size() <= 60)) &&
+        (!('paymentNotes' in data) || (data.paymentNotes is string && data.paymentNotes.size() <= 300)) &&
+        (!('defaultPickupNote' in data) || (data.defaultPickupNote is string && data.defaultPickupNote.size() <= 200)) &&
+        (!('notifyOnNewSale' in data) || data.notifyOnNewSale is bool) &&
         (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 60));
     }
 
@@ -523,26 +560,80 @@ service cloud.firestore {
 
     // Store & Marketplace Orders
     match /orders/{orderId} {
-      allow get: if isValidId(orderId) && (isDeliveryStaff() || (isVerifiedUser() && existing().userId == request.auth.uid));
-      allow list: if isDeliveryStaff() || (isVerifiedUser() && resource.data.userId == request.auth.uid);
+      allow get: if isValidId(orderId) && (
+        isDeliveryStaff() ||
+        (isVerifiedUser() && (
+          existing().userId == request.auth.uid ||
+          ('sellerId' in existing() && existing().sellerId == request.auth.uid)
+        ))
+      );
+      allow list: if isDeliveryStaff() || (
+        isVerifiedUser() &&
+        (resource.data.userId == request.auth.uid || resource.data.sellerId == request.auth.uid)
+      );
       allow create: if isValidId(orderId) && isVerifiedUser() && isValidOrder(incoming()) && (
         isAdmin() || incoming().userId == request.auth.uid
       );
       allow update: if isValidId(orderId) && isVerifiedUser() && isValidOrder(incoming()) && (
         isAdmin() ||
-        (isDeliveryStaff() && incoming().diff(existing()).affectedKeys().hasOnly(['deliveryStatus', 'cashCollected', 'deliveredAt', 'assignedRunnerId', 'assignedRunner', 'logs', 'updatedAt']))
+        (isDeliveryStaff() && incoming().diff(existing()).affectedKeys().hasOnly(['deliveryStatus', 'cashCollected', 'deliveredAt', 'assignedRunnerId', 'assignedRunner', 'logs', 'updatedAt'])) ||
+        (
+          'sellerId' in existing() &&
+          existing().sellerId == request.auth.uid &&
+          incoming().sellerId == existing().sellerId &&
+          incoming().userId == existing().userId &&
+          incoming().totalAmount == existing().totalAmount &&
+          incoming().paymentMethod == existing().paymentMethod &&
+          incoming().source == existing().source &&
+          (
+            incoming().diff(existing()).affectedKeys().hasOnly(['debtSettled', 'debtPaidAmount', 'settledAt', 'logs', 'updatedAt']) ||
+            (
+              existing().status == 'Pending Seller Confirmation' &&
+              incoming().status in ['Confirmed', 'Completed', 'Rejected'] &&
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'status', 'deliveryStatus', 'assignedRunnerId', 'assignedRunner',
+                'deliveredAt', 'cashCollected', 'debtSettled', 'debtPaidAmount', 'settledAt', 'logs', 'updatedAt'
+              ])
+            )
+          )
+        )
       );
       allow delete: if isValidId(orderId) && isSuperAdmin();
     }
 
     // Payment Proofs
     match /paymentProofs/{proofId} {
-      allow get: if isValidId(proofId) && (isAdmin() || (isVerifiedUser() && existing().userId == request.auth.uid));
-      allow list: if isAdmin() || (isVerifiedUser() && resource.data.userId == request.auth.uid);
+      allow get: if isValidId(proofId) && (
+        isAdmin() ||
+        (isVerifiedUser() && (
+          existing().userId == request.auth.uid ||
+          ('sellerId' in existing() && existing().sellerId == request.auth.uid)
+        ))
+      );
+      allow list: if isAdmin() || (
+        isVerifiedUser() && (
+          resource.data.userId == request.auth.uid ||
+          resource.data.sellerId == request.auth.uid
+        )
+      );
       allow create: if isValidId(proofId) && isVerifiedUser() && isValidPaymentProof(incoming()) && (
         isAdmin() || (incoming().userId == request.auth.uid && incoming().status == 'pending')
       );
-      allow update: if isValidId(proofId) && isAdmin() && isValidPaymentProof(incoming());
+      allow update: if isValidId(proofId) && isVerifiedUser() && isValidPaymentProof(incoming()) && (
+        isAdmin() ||
+        (
+          'sellerId' in existing() &&
+          existing().sellerId == request.auth.uid &&
+          existing().purpose == 'Community Seller Settlement' &&
+          existing().status == 'pending' &&
+          incoming().status in ['approved', 'rejected'] &&
+          incoming().sellerId == existing().sellerId &&
+          incoming().userId == existing().userId &&
+          incoming().amount == existing().amount &&
+          incoming().purpose == existing().purpose &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'reviewedBy', 'reviewedAt', 'updatedAt'])
+        )
+      );
       allow delete: if isValidId(proofId) && isSuperAdmin();
     }
 
@@ -583,12 +674,36 @@ service cloud.firestore {
       allow update: if isValidId(listingId) && isVerifiedUser() && isValidMarketplaceListing(incoming()) && (
         isAdmin() ||
         (
-          incoming().diff(existing()).affectedKeys().hasOnly(['stock', 'soldCount', 'updatedAt']) &&
-          incoming().stock <= existing().stock &&
-          incoming().soldCount >= existing().soldCount
+          existing().sellerId == request.auth.uid &&
+          incoming().id == existing().id &&
+          incoming().sellerId == existing().sellerId &&
+          incoming().approvalStatus == existing().approvalStatus &&
+          incoming().commissionType == existing().commissionType &&
+          incoming().commissionValue == existing().commissionValue &&
+          incoming().soldCount >= existing().soldCount &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'title', 'description', 'price', 'stock', 'soldCount',
+            'paused', 'allowCash', 'allowDebt', 'pickupNote', 'paymentDetails', 'updatedAt'
+          ])
         )
       );
-      allow delete: if isValidId(listingId) && isAdmin();
+      allow delete: if isValidId(listingId) && (
+        isAdmin() ||
+        (isVerifiedUser() && existing().sellerId == request.auth.uid && existing().soldCount == 0)
+      );
+    }
+
+    // Seller Payout, Reminder & Preference Configurations
+    match /sellerConfigs/{userId} {
+      allow get: if isValidId(userId) && isVerifiedUser();
+      allow list: if isAdmin();
+      allow create: if isValidId(userId) && isVerifiedUser() && isValidSellerConfig(incoming()) && (
+        isAdmin() || (isOwner(userId) && incoming().userId == request.auth.uid)
+      );
+      allow update: if isValidId(userId) && isVerifiedUser() && isValidSellerConfig(incoming()) && (
+        isAdmin() || (isOwner(userId) && incoming().userId == existing().userId)
+      );
+      allow delete: if isValidId(userId) && isSuperAdmin();
     }
 
     // P2P E-Wallet Exchange Posts

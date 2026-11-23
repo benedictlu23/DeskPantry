@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
+  BarChart3,
   Bell,
   CheckCircle2,
   Plus,
@@ -45,8 +46,12 @@ interface CommunityFeedViewProps {
   onBuyListing: (
     listingId: string,
     paymentMethod: PaymentMethod.Cash | PaymentMethod.Debt,
-    fulfillment: FulfillmentType
+    fulfillment: FulfillmentType,
+    quantity?: number
   ) => void;
+  onOpenSellerDashboard?: () => void;
+  sellerCollectablesTotal?: number;
+  openSellFormSignal?: number;
 }
 
 export const CommunityFeedView: React.FC<CommunityFeedViewProps> = ({
@@ -63,6 +68,9 @@ export const CommunityFeedView: React.FC<CommunityFeedViewProps> = ({
   onCreateSuggestion,
   onCreateListing,
   onBuyListing,
+  onOpenSellerDashboard,
+  sellerCollectablesTotal = 0,
+  openSellFormSignal = 0,
 }) => {
   const [activeTab, setActiveTab] = useState<'marketplace' | 'suggestions'>('marketplace');
   const [showSuggestForm, setShowSuggestForm] = useState(false);
@@ -72,7 +80,15 @@ export const CommunityFeedView: React.FC<CommunityFeedViewProps> = ({
     PaymentMethod.Cash
   );
   const [buyFulfillment, setBuyFulfillment] = useState<FulfillmentType>(FulfillmentType.Pickup);
+  const [buyQuantity, setBuyQuantity] = useState(1);
   const [feedbackBanner, setFeedbackBanner] = useState('');
+
+  useEffect(() => {
+    if (openSellFormSignal > 0) {
+      setActiveTab('marketplace');
+      setShowSellForm(true);
+    }
+  }, [openSellFormSignal]);
 
   // Suggestion form state
   const [sugTitle, setSugTitle] = useState('');
@@ -89,7 +105,14 @@ export const CommunityFeedView: React.FC<CommunityFeedViewProps> = ({
   const [sellImage, setSellImage] = useState('');
 
   const isGuest = currentRole === UserRole.Guest || !currentUser;
-  const approvedListings = listings.filter((l) => l.approvalStatus === 'approved');
+  const approvedListings = listings.filter(
+    (l) =>
+      l.approvalStatus === 'approved' &&
+      (!l.paused || (currentUser && l.sellerId === currentUser.id))
+  );
+  const myListingsCount = currentUser
+    ? listings.filter((l) => l.sellerId === currentUser.id).length
+    : 0;
   const myPendingListings = currentUser
     ? listings.filter((l) => l.sellerId === currentUser.id && l.approvalStatus === 'pending')
     : [];
@@ -150,6 +173,14 @@ export const CommunityFeedView: React.FC<CommunityFeedViewProps> = ({
     setTimeout(() => setFeedbackBanner(''), 5500);
   };
 
+  const openBuyModal = (listing: MarketplaceListing) => {
+    const canCash = listing.allowCash ?? true;
+    const canDebt = listing.allowDebt ?? true;
+    setBuyPayment(canCash ? PaymentMethod.Cash : canDebt ? PaymentMethod.Debt : PaymentMethod.Cash);
+    setBuyQuantity(1);
+    setBuyModalListing(listing);
+  };
+
   const handleConfirmPurchase = () => {
     if (!buyModalListing) return;
     if (isGuest) {
@@ -157,14 +188,20 @@ export const CommunityFeedView: React.FC<CommunityFeedViewProps> = ({
       onOpenSignIn();
       return;
     }
-    onBuyListing(buyModalListing.id, buyPayment, buyFulfillment);
+    const canCash = buyModalListing.allowCash ?? true;
+    const canDebt = buyModalListing.allowDebt ?? true;
+    if (buyPayment === PaymentMethod.Cash && !canCash) return;
+    if (buyPayment === PaymentMethod.Debt && !canDebt) return;
+
+    const safeQty = Math.max(1, Math.min(buyModalListing.stock, Math.round(buyQuantity || 1)));
+    onBuyListing(buyModalListing.id, buyPayment, buyFulfillment, safeQty);
     setFeedbackBanner(
-      `Purchased "${buyModalListing.title}" via ${
-        buyPayment === PaymentMethod.Debt ? 'Store Debt' : 'Cash'
-      }.`
+      `Order submitted for ${safeQty}× "${buyModalListing.title}" via ${
+        buyPayment === PaymentMethod.Debt ? 'Debt' : 'Cash'
+      }. Waiting for ${buyModalListing.sellerName} to confirm before it updates your ledger.`
     );
     setBuyModalListing(null);
-    setTimeout(() => setFeedbackBanner(''), 4500);
+    setTimeout(() => setFeedbackBanner(''), 6000);
   };
 
   return (
@@ -245,14 +282,32 @@ export const CommunityFeedView: React.FC<CommunityFeedViewProps> = ({
                 Every seller sets a percentage or fixed commission per sale for the store owner. Posts appear after Admin approval.
               </p>
             </div>
-            <button
-              type="button"
-              onClick={() => (isGuest ? onOpenSignIn() : setShowSellForm((prev) => !prev))}
-              className="min-h-[42px] inline-flex items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 py-2 text-xs font-semibold text-white hover:bg-teal-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              <Plus className="w-4 h-4" />
-              <span>{showSellForm ? 'Close Form' : 'Post Item for Sale'}</span>
-            </button>
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              {!isGuest && onOpenSellerDashboard && (
+                <button
+                  type="button"
+                  onClick={onOpenSellerDashboard}
+                  className="min-h-[42px] inline-flex items-center justify-center gap-2 rounded-xl border border-teal-200 dark:border-teal-800 bg-teal-50/70 dark:bg-teal-950/40 px-4 py-2 text-xs font-semibold text-teal-800 dark:text-teal-200 hover:bg-teal-100 dark:hover:bg-teal-950/70 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  <BarChart3 className="w-4 h-4" />
+                  <span>
+                    Seller Dashboard
+                    {myListingsCount > 0 ? ` (${myListingsCount})` : ''}
+                    {sellerCollectablesTotal > 0
+                      ? ` · ${formatPHP(sellerCollectablesTotal)}`
+                      : ''}
+                  </span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => (isGuest ? onOpenSignIn() : setShowSellForm((prev) => !prev))}
+                className="min-h-[42px] inline-flex items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 py-2 text-xs font-semibold text-white hover:bg-teal-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <Plus className="w-4 h-4" />
+                <span>{showSellForm ? 'Close Form' : 'Post Item for Sale'}</span>
+              </button>
+            </div>
           </div>
 
           {showSellForm && (
@@ -461,8 +516,15 @@ export const CommunityFeedView: React.FC<CommunityFeedViewProps> = ({
                       />
                     </div>
                     <div className="p-5">
-                      <div className="text-xs text-stone-500 dark:text-stone-400">
-                        {listing.sellerName} · {listing.sellerDepartment}
+                      <div className="flex items-center justify-between gap-2 text-xs text-stone-500 dark:text-stone-400">
+                        <span>
+                          {listing.sellerName} · {listing.sellerDepartment}
+                        </span>
+                        {listing.paused && (
+                          <span className="px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 font-semibold">
+                            Paused
+                          </span>
+                        )}
                       </div>
                       <h3 className="mt-1 text-base font-bold text-stone-900 dark:text-stone-100">
                         {listing.title}
@@ -470,6 +532,11 @@ export const CommunityFeedView: React.FC<CommunityFeedViewProps> = ({
                       <p className="mt-1 text-sm text-stone-600 dark:text-stone-400 line-clamp-2">
                         {listing.description}
                       </p>
+                      {listing.pickupNote && (
+                        <p className="mt-1.5 text-xs text-teal-700 dark:text-teal-400 font-medium">
+                          Pickup: {listing.pickupNote}
+                        </p>
+                      )}
                       <div className="mt-3 text-xs text-stone-500 dark:text-stone-400 tabular-nums">
                         {listing.stock > 0 ? `${listing.stock} left` : 'Sold out'} ·{' '}
                         {listing.soldCount} sold · Store share:{' '}
@@ -486,19 +553,26 @@ export const CommunityFeedView: React.FC<CommunityFeedViewProps> = ({
                     </span>
                     <button
                       type="button"
-                      disabled={listing.stock <= 0}
+                      disabled={listing.stock <= 0 || Boolean(listing.paused)}
                       onClick={() =>
-                        isGuest ? onOpenSignIn() : setBuyModalListing(listing)
+                        isGuest ? onOpenSignIn() : openBuyModal(listing)
                       }
                       className="min-h-[42px] inline-flex items-center gap-1.5 rounded-xl bg-teal-700 px-4 py-2 text-xs font-semibold text-white hover:bg-teal-800 disabled:bg-stone-200 dark:disabled:bg-stone-800 disabled:text-stone-500 transition-colors cursor-pointer"
                     >
                       <ShoppingCart className="w-3.5 h-3.5" />
                       <span>
-                        {listing.stock <= 0
-                          ? 'Sold Out'
-                          : isGuest
-                            ? 'Sign in to Buy'
-                            : 'Buy (Cash / Debt)'}
+                        {listing.paused
+                          ? 'Paused'
+                          : listing.stock <= 0
+                            ? 'Sold Out'
+                            : isGuest
+                              ? 'Sign in to Buy'
+                              : `Buy (${[
+                                  (listing.allowCash ?? true) ? 'Cash' : null,
+                                  (listing.allowDebt ?? true) ? 'Debt' : null,
+                                ]
+                                  .filter(Boolean)
+                                  .join(' / ') || 'Order'})`}
                       </span>
                     </button>
                   </div>
@@ -669,6 +743,50 @@ export const CommunityFeedView: React.FC<CommunityFeedViewProps> = ({
               </button>
             </div>
 
+            {(buyModalListing.pickupNote || buyModalListing.paymentDetails) && (
+              <div className="rounded-xl bg-stone-50 dark:bg-[#172523] border border-stone-200 dark:border-stone-800 p-3 space-y-1 text-xs text-stone-600 dark:text-stone-300">
+                {buyModalListing.pickupNote && (
+                  <div>
+                    <strong className="text-stone-800 dark:text-stone-100">Pickup: </strong>
+                    {buyModalListing.pickupNote}
+                  </div>
+                )}
+                {buyModalListing.paymentDetails && (
+                  <div>
+                    <strong className="text-stone-800 dark:text-stone-100">Seller Payment Info: </strong>
+                    {buyModalListing.paymentDetails}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div>
+              <label className="block text-xs font-semibold text-stone-700 dark:text-stone-300 mb-2">
+                Quantity ({buyModalListing.stock} available)
+              </label>
+              <div className="flex items-center justify-between rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-[#172523] px-3 py-1.5">
+                <button
+                  type="button"
+                  disabled={buyQuantity <= 1}
+                  onClick={() => setBuyQuantity((q) => Math.max(1, q - 1))}
+                  className="min-h-[34px] min-w-[34px] rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-[#121D1B] text-sm font-bold text-stone-700 dark:text-stone-200 disabled:opacity-40 cursor-pointer"
+                >
+                  −
+                </button>
+                <span className="font-mono text-sm font-bold tabular-nums text-stone-900 dark:text-stone-100">
+                  {buyQuantity} {buyQuantity === 1 ? 'unit' : 'units'} · {formatPHP(buyModalListing.price * buyQuantity)}
+                </span>
+                <button
+                  type="button"
+                  disabled={buyQuantity >= buyModalListing.stock}
+                  onClick={() => setBuyQuantity((q) => Math.min(buyModalListing.stock, q + 1))}
+                  className="min-h-[34px] min-w-[34px] rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-[#121D1B] text-sm font-bold text-stone-700 dark:text-stone-200 disabled:opacity-40 cursor-pointer"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+
             <div>
               <label className="block text-xs font-semibold text-stone-700 dark:text-stone-300 mb-2">
                 Pickup or Desk Delivery
@@ -693,23 +811,31 @@ export const CommunityFeedView: React.FC<CommunityFeedViewProps> = ({
 
             <div>
               <label className="block text-xs font-semibold text-stone-700 dark:text-stone-300 mb-2">
-                Payment Method (Cash or Store Debt)
+                Payment Method
               </label>
               <div className="grid grid-cols-2 gap-2">
-                {([PaymentMethod.Cash, PaymentMethod.Debt] as const).map((pm) => (
-                  <button
-                    key={pm}
-                    type="button"
-                    onClick={() => setBuyPayment(pm)}
-                    className={`min-h-[40px] rounded-xl border text-xs font-semibold cursor-pointer ${
-                      buyPayment === pm
-                        ? 'border-teal-700 bg-teal-50 dark:bg-teal-950/60 text-teal-800 dark:text-teal-200'
-                        : 'border-stone-200 dark:border-stone-700 text-stone-600 dark:text-stone-300'
-                    }`}
-                  >
-                    {pm === PaymentMethod.Debt ? 'Store Credit (Debt)' : 'Cash'}
-                  </button>
-                ))}
+                {([PaymentMethod.Cash, PaymentMethod.Debt] as const).map((pm) => {
+                  const enabled =
+                    pm === PaymentMethod.Cash
+                      ? buyModalListing.allowCash ?? true
+                      : buyModalListing.allowDebt ?? true;
+                  return (
+                    <button
+                      key={pm}
+                      type="button"
+                      disabled={!enabled}
+                      onClick={() => setBuyPayment(pm)}
+                      className={`min-h-[40px] rounded-xl border text-xs font-semibold cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+                        buyPayment === pm
+                          ? 'border-teal-700 bg-teal-50 dark:bg-teal-950/60 text-teal-800 dark:text-teal-200'
+                          : 'border-stone-200 dark:border-stone-700 text-stone-600 dark:text-stone-300'
+                      }`}
+                    >
+                      {pm === PaymentMethod.Debt ? 'Store Credit (Debt)' : 'Cash'}
+                      {!enabled ? ' (Off)' : ''}
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
@@ -726,7 +852,7 @@ export const CommunityFeedView: React.FC<CommunityFeedViewProps> = ({
                 onClick={handleConfirmPurchase}
                 className="min-h-[42px] px-5 py-2 rounded-xl bg-teal-700 text-xs font-semibold text-white hover:bg-teal-800 cursor-pointer"
               >
-                Confirm Purchase · {formatPHP(buyModalListing.price)}
+                Confirm Purchase · {formatPHP(buyModalListing.price * buyQuantity)}
               </button>
             </div>
           </div>

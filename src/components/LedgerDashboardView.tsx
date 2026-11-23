@@ -16,13 +16,22 @@ import { SAMPLE_RECEIPT_DATA_URL } from '../data/seedData';
 import {
   FulfillmentType,
   LoanRecord,
+  MarketplaceListing,
+  PaymentMethod,
   PaymentMethodConfig,
   PaymentProof,
+  SellerConfig,
   StoreOrder,
   UserAccount,
   UserRole,
 } from '../types';
-import { formatPHP, isDateWithinPeriod } from '../utils/format';
+import {
+  formatPHP,
+  getOrderItemsSubtotal,
+  getOrderRemainingDebt,
+  isDateWithinPeriod,
+  isOrderPendingSellerConfirmation,
+} from '../utils/format';
 import { compressImageFileToDataUrl } from '../utils/image';
 import { PaymentMethodCard } from './PaymentMethodCard';
 
@@ -31,6 +40,7 @@ interface LedgerDashboardViewProps {
   currentRole: UserRole;
   users: UserAccount[];
   orders: StoreOrder[];
+  listings: MarketplaceListing[];
   loans: LoanRecord[];
   proofs: PaymentProof[];
   paymentMethods: PaymentMethodConfig[];
@@ -44,6 +54,28 @@ interface LedgerDashboardViewProps {
     referenceNo: string;
     imageDataUrl: string;
   }) => void;
+  onSubmitSellerDebtProof: (payload: {
+    sellerId: string;
+    sellerName: string;
+    amount: number;
+    channel: string;
+    referenceNo: string;
+    imageDataUrl: string;
+    orderIds: string[];
+  }) => Promise<void>;
+  onFetchSellerConfig?: (sellerId: string) => Promise<SellerConfig | null>;
+}
+
+interface SellerDebtGroup {
+  sellerId: string;
+  sellerName: string;
+  totalOwed: number;
+  grossDebt: number;
+  paidSoFar: number;
+  orderIds: string[];
+  itemCounts: Record<string, number>;
+  dueLabel: string;
+  listingPaymentHint: string;
 }
 
 export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
@@ -51,6 +83,7 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
   currentRole,
   users,
   orders,
+  listings,
   loans,
   proofs,
   paymentMethods,
@@ -59,6 +92,8 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
   nextDueLabel,
   onOpenSignIn,
   onSubmitDebtProof,
+  onSubmitSellerDebtProof,
+  onFetchSellerConfig,
 }) => {
   const [activeTab, setActiveTab] = useState<'orders' | 'receipts'>('orders');
   const [showPayModal, setShowPayModal] = useState(false);
@@ -75,6 +110,17 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
   const [payRef, setPayRef] = useState('');
   const [payImage, setPayImage] = useState('');
   const [banner, setBanner] = useState('');
+
+  // Community Seller Pay Modal state
+  const [payingSellerGroup, setPayingSellerGroup] = useState<SellerDebtGroup | null>(null);
+  const [sellerPayConfig, setSellerPayConfig] = useState<SellerConfig | null>(null);
+  const [loadingSellerCfg, setLoadingSellerCfg] = useState(false);
+  const [sellerPayAmount, setSellerPayAmount] = useState('');
+  const [sellerPayChannel, setSellerPayChannel] = useState('GCash');
+  const [sellerPayRef, setSellerPayRef] = useState('');
+  const [sellerPayImage, setSellerPayImage] = useState('');
+  const [submittingSellerProof, setSubmittingSellerProof] = useState(false);
+  const [sellerPayError, setSellerPayError] = useState('');
 
   // Recent Orders Filters & Expanded Logs
   const [orderSearch, setOrderSearch] = useState('');
@@ -116,13 +162,90 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
     });
   }, [userOrders, orderSearch, statusFilter, fulfillmentFilter, periodFilter]);
 
+  const pendingSellerConfirmCount = useMemo(
+    () => userOrders.filter(isOrderPendingSellerConfirmation).length,
+    [userOrders]
+  );
+
+  // Community Debt grouped per Seller (ONLY confirmed/completed orders, never unconfirmed ones)
+  const sellerDebtGroups = useMemo(() => {
+    const map = new Map<string, SellerDebtGroup>();
+    for (const o of userOrders) {
+      if (o.source !== 'marketplace') continue;
+      if (o.paymentMethod !== PaymentMethod.Debt) continue;
+      if (o.status !== 'Confirmed' && o.status !== 'Completed') continue;
+      if (o.debtSettled) continue;
+
+      const remainingAmt = getOrderRemainingDebt(o);
+      if (remainingAmt <= 0.009) continue;
+
+      const grossAmt = getOrderItemsSubtotal(o);
+      const paidAmt = Math.max(0, grossAmt - remainingAmt);
+
+      const firstListing = o.items
+        .map((li) => listings.find((l) => l.id === li.itemId))
+        .find((l) => Boolean(l));
+      const sellerId = o.sellerId || firstListing?.sellerId || '';
+      if (!sellerId) continue;
+      const sellerName = o.sellerName || firstListing?.sellerName || 'Community Seller';
+      const listingHint =
+        listings.find((l) => l.sellerId === sellerId && l.paymentDetails?.trim())
+          ?.paymentDetails ?? '';
+
+      const existing = map.get(sellerId);
+      if (existing) {
+        existing.totalOwed += remainingAmt;
+        existing.grossDebt += grossAmt;
+        existing.paidSoFar += paidAmt;
+        existing.orderIds.push(o.id);
+        for (const li of o.items) {
+          const cleanName = li.name.replace(' (Coworker Sale)', '').trim();
+          existing.itemCounts[cleanName] = (existing.itemCounts[cleanName] ?? 0) + li.quantity;
+        }
+      } else {
+        const itemCounts: Record<string, number> = {};
+        for (const li of o.items) {
+          const cleanName = li.name.replace(' (Coworker Sale)', '').trim();
+          itemCounts[cleanName] = (itemCounts[cleanName] ?? 0) + li.quantity;
+        }
+        map.set(sellerId, {
+          sellerId,
+          sellerName,
+          totalOwed: remainingAmt,
+          grossDebt: grossAmt,
+          paidSoFar: paidAmt,
+          orderIds: [o.id],
+          itemCounts,
+          dueLabel: o.dueDateLabel || nextDueLabel,
+          listingPaymentHint: listingHint,
+        });
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => b.totalOwed - a.totalOwed);
+  }, [userOrders, listings, nextDueLabel]);
+
+  const totalCommunitySellerDebt = useMemo(
+    () => sellerDebtGroups.reduce((sum, g) => sum + g.totalOwed, 0),
+    [sellerDebtGroups]
+  );
+
   const userProofs = currentUser ? proofs.filter((p) => p.userId === currentUser.id) : [];
+  const pendingSellerProofTotal = useMemo(
+    () =>
+      userProofs
+        .filter(
+          (p) => p.purpose === 'Community Seller Settlement' && p.status === 'pending'
+        )
+        .reduce((sum, p) => sum + p.amount, 0),
+    [userProofs]
+  );
   const userLoans = currentUser ? loans.filter((l) => l.userId === currentUser.id) : [];
   const userActiveLoanBal = userLoans
     .filter((l) => l.status === 'Active')
     .reduce((s, l) => s + l.remainingBalance, 0);
 
-  const totalOwed = (currentUser?.debtBalance ?? 0) + userActiveLoanBal;
+  const totalOwed =
+    (currentUser?.debtBalance ?? 0) + totalCommunitySellerDebt + userActiveLoanBal;
   const pendingProofsForUser = userProofs.filter((p) => p.status === 'pending').length;
 
   const selectedDigitalMethod =
@@ -134,6 +257,19 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
     void compressImageFileToDataUrl(file).then((compressed) => {
       setPayImage(compressed);
     });
+  };
+
+  const handleSellerFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    void compressImageFileToDataUrl(file)
+      .then((compressed) => {
+        setSellerPayImage(compressed);
+        setSellerPayError('');
+      })
+      .catch(() => {
+        setSellerPayError('Could not process selected receipt image.');
+      });
   };
 
   const handleProofSubmit = (e: React.FormEvent) => {
@@ -152,14 +288,70 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
     setPayImage('');
     setActiveTab('receipts');
     setBanner(
-      `Receipt sent! (${selectedDigitalMethod.title} · ${formatPHP(amt, true)}). Admin will check and update your balance soon.`
+      `Store payment receipt sent! (${selectedDigitalMethod.title} · ${formatPHP(amt, true)}). Store Admin will verify and update your store debt balance.`
     );
-    setTimeout(() => setBanner(''), 5000);
+    setTimeout(() => setBanner(''), 5500);
   };
 
   const openPayModalWithAmount = (amount: number) => {
     setPayAmount(String(Math.max(0, amount)));
     setShowPayModal(true);
+  };
+
+  const openPaySellerModal = (group: SellerDebtGroup) => {
+    setPayingSellerGroup(group);
+    setSellerPayAmount(String(Math.max(0, group.totalOwed)));
+    setSellerPayChannel('GCash');
+    setSellerPayRef('');
+    setSellerPayImage('');
+    setSellerPayError('');
+    setSellerPayConfig(null);
+    if (onFetchSellerConfig) {
+      setLoadingSellerCfg(true);
+      void onFetchSellerConfig(group.sellerId)
+        .then((cfg) => setSellerPayConfig(cfg))
+        .finally(() => setLoadingSellerCfg(false));
+    }
+  };
+
+  const handleSellerProofSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!payingSellerGroup) return;
+    const amt = Number(sellerPayAmount) || 0;
+    if (amt <= 0 || !sellerPayRef.trim() || !sellerPayImage) {
+      setSellerPayError('Enter payment amount, reference number, and upload your receipt image.');
+      return;
+    }
+
+    setSubmittingSellerProof(true);
+    setSellerPayError('');
+    try {
+      await onSubmitSellerDebtProof({
+        sellerId: payingSellerGroup.sellerId,
+        sellerName: payingSellerGroup.sellerName,
+        amount: amt,
+        channel: sellerPayChannel,
+        referenceNo: sellerPayRef.trim(),
+        imageDataUrl: sellerPayImage,
+        orderIds: payingSellerGroup.orderIds,
+      });
+      const paidName = payingSellerGroup.sellerName;
+      setPayingSellerGroup(null);
+      setSellerPayAmount('');
+      setSellerPayRef('');
+      setSellerPayImage('');
+      setActiveTab('receipts');
+      setBanner(
+        `Receipt sent to ${paidName} (${sellerPayChannel} · ${formatPHP(amt, true)}). They can verify and settle your balance on their Seller Dashboard.`
+      );
+      setTimeout(() => setBanner(''), 6000);
+    } catch (err) {
+      setSellerPayError(
+        err instanceof Error ? err.message : 'Could not submit seller payment proof.'
+      );
+    } finally {
+      setSubmittingSellerProof(false);
+    }
   };
 
   if (isGuest) {
@@ -198,11 +390,19 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
 
         <button
           type="button"
-          onClick={() => openPayModalWithAmount(currentUser.debtBalance)}
+          onClick={() =>
+            currentUser.debtBalance === 0 && sellerDebtGroups.length > 0
+              ? openPaySellerModal(sellerDebtGroups[0])
+              : openPayModalWithAmount(currentUser.debtBalance)
+          }
           className="min-h-[44px] inline-flex items-center justify-center gap-2 rounded-xl bg-teal-700 px-5 py-2.5 text-sm font-semibold text-white hover:bg-teal-800 transition-colors shrink-0 cursor-pointer"
         >
           <CreditCard className="w-4 h-4" />
-          <span>Pay Balance / Upload Receipt</span>
+          <span>
+            {currentUser.debtBalance === 0 && sellerDebtGroups.length > 0
+              ? 'Pay Community Seller'
+              : 'Pay Store Debt'}
+          </span>
         </button>
       </div>
 
@@ -213,19 +413,26 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
         </div>
       )}
 
-      {/* Simple Summary — Easy for Anyone to Understand */}
+      {pendingSellerConfirmCount > 0 && (
+        <div className="rounded-xl border border-amber-200 dark:border-amber-800/70 bg-amber-50/80 dark:bg-amber-950/35 px-4 py-3 text-xs text-amber-900 dark:text-amber-200">
+          You have <strong>{pendingSellerConfirmCount}</strong> community order
+          {pendingSellerConfirmCount === 1 ? '' : 's'} waiting for Seller Confirmation. Unconfirmed orders do not add to your debt ledger until the seller confirms them.
+        </div>
+      )}
+
+      {/* Separated Summary Strip: Store Debt vs Community Seller Debt vs Loan */}
       <div
         className={`grid grid-cols-1 sm:grid-cols-2 ${
           currentUser.pautanganEnabled || userActiveLoanBal > 0
-            ? 'lg:grid-cols-4'
-            : 'lg:grid-cols-3'
+            ? 'lg:grid-cols-5'
+            : 'lg:grid-cols-4'
         } gap-3.5 sm:gap-4`}
       >
-        {/* Card 1: Store Utang */}
+        {/* Card 1: Store Debt */}
         <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] p-4 sm:p-5 flex flex-col justify-between gap-3">
           <div>
             <div className="text-xs font-semibold text-stone-500 dark:text-stone-400">
-              1. What I Owe the Store (Utang)
+              1. Storefront Debt (Store)
             </div>
             <div
               className={`mt-1.5 text-2xl font-extrabold font-mono tabular-nums ${
@@ -238,7 +445,7 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
             </div>
             <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">
               {currentUser.debtBalance > 0
-                ? `Please pay on or before ${nextDueLabel}.`
+                ? `Official pantry orders due ${nextDueLabel}.`
                 : 'All paid! Nothing owed to the store.'}
             </p>
           </div>
@@ -248,16 +455,44 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
               onClick={() => openPayModalWithAmount(currentUser.debtBalance)}
               className="w-full min-h-[36px] rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-800 dark:text-amber-300 text-xs font-bold cursor-pointer"
             >
-              Pay {formatPHP(currentUser.debtBalance)} Now
+              Pay Store ({formatPHP(currentUser.debtBalance)})
             </button>
           )}
         </div>
 
-        {/* Card 2: Cash Loan (only shown when Pautangan is enabled for user or user has an active loan) */}
+        {/* Card 2: Community Seller Debt */}
+        <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] p-4 sm:p-5 flex flex-col justify-between gap-3">
+          <div>
+            <div className="text-xs font-semibold text-stone-500 dark:text-stone-400">
+              2. Community Debt (Sellers)
+            </div>
+            <div
+              className={`mt-1.5 text-2xl font-extrabold font-mono tabular-nums ${
+                totalCommunitySellerDebt > 0
+                  ? 'text-amber-600 dark:text-amber-400'
+                  : 'text-emerald-600 dark:text-emerald-400'
+              }`}
+            >
+              {formatPHP(totalCommunitySellerDebt, true)}
+            </div>
+            <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">
+              {sellerDebtGroups.length > 0
+                ? `Across ${sellerDebtGroups.length} seller${sellerDebtGroups.length === 1 ? '' : 's'} — pay each seller below.`
+                : 'All community sellers settled!'}
+            </p>
+            {pendingSellerProofTotal > 0 && (
+              <p className="mt-1 text-[11px] font-semibold text-teal-700 dark:text-teal-400">
+                {formatPHP(pendingSellerProofTotal, true)} awaiting seller approval
+              </p>
+            )}
+          </div>
+        </div>
+
+        {/* Card 3: Cash Loan (only shown when Pautangan is enabled for user or user has an active loan) */}
         {(currentUser.pautanganEnabled || userActiveLoanBal > 0) && (
           <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] p-4 sm:p-5">
             <div className="text-xs font-semibold text-stone-500 dark:text-stone-400">
-              2. Cash Loan Left (Pautangan)
+              3. Cash Loan Left (Pautangan)
             </div>
             <div className="mt-1.5 text-2xl font-extrabold text-stone-900 dark:text-stone-100 font-mono tabular-nums">
               {formatPHP(userActiveLoanBal, true)}
@@ -270,48 +505,133 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
           </div>
         )}
 
-        {/* Card 3: Total Combined */}
+        {/* Card 4: Total Combined */}
         <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] p-4 sm:p-5">
           <div className="text-xs font-semibold text-stone-500 dark:text-stone-400">
-            {currentUser.pautanganEnabled || userActiveLoanBal > 0
-              ? '3. Total Money to Pay Back'
-              : '2. Total Money to Pay Back'}
+            Total Combined Owed
           </div>
           <div className="mt-1.5 text-2xl font-extrabold text-teal-700 dark:text-teal-400 font-mono tabular-nums">
             {formatPHP(totalOwed, true)}
           </div>
           <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">
-            {currentUser.pautanganEnabled || userActiveLoanBal > 0
-              ? 'Store utang + cash loan combined.'
-              : 'Current store credit balance.'}
+            Store + community sellers{userActiveLoanBal > 0 ? ' + loan' : ''}
           </p>
         </div>
 
-        {/* Card 4: Activity */}
+        {/* Card 5: Activity */}
         <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] p-4 sm:p-5">
           <div className="text-xs font-semibold text-stone-500 dark:text-stone-400">
-            {currentUser.pautanganEnabled || userActiveLoanBal > 0
-              ? '4. My Orders & Receipts'
-              : '3. My Orders & Receipts'}
+            My Orders &amp; Receipts
           </div>
           <div className="mt-1.5 text-2xl font-extrabold text-stone-900 dark:text-stone-100 font-mono tabular-nums">
             {userOrders.length} Orders
           </div>
           <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">
             {pendingProofsForUser > 0
-              ? `${pendingProofsForUser} receipt waiting for Admin check`
-              : `Total spent: ${formatPHP(currentUser.totalSpent)}`}
+              ? `${pendingProofsForUser} receipt awaiting verification`
+              : `Store spent: ${formatPHP(currentUser.totalSpent)}`}
           </p>
         </div>
       </div>
 
-      {/* Simple 3-Step How To Pay Guide (shown when user has open debt) */}
+      {/* Community Debt Breakdown by Seller */}
+      {sellerDebtGroups.length > 0 && (
+        <div className="rounded-2xl border border-amber-200 dark:border-amber-800/70 bg-white dark:bg-[#121D1B] overflow-hidden">
+          <div className="px-5 py-4 border-b border-stone-200 dark:border-stone-800 bg-amber-50/60 dark:bg-amber-950/25 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="text-sm font-bold text-stone-900 dark:text-stone-100">
+                Community Debt by Seller (Pay Separately)
+              </h2>
+              <p className="text-xs text-stone-600 dark:text-stone-400">
+                Community marketplace debts are separated from Store Debt. Pay each seller directly below so they can verify and settle your order.
+              </p>
+            </div>
+            <span className="text-xs font-bold font-mono tabular-nums text-amber-700 dark:text-amber-300">
+              Total Sellers Owed: {formatPHP(totalCommunitySellerDebt, true)}
+            </span>
+          </div>
+
+          <div className="divide-y divide-stone-200 dark:divide-stone-800">
+            {sellerDebtGroups.map((group) => {
+              const pendingToSeller = userProofs.filter(
+                (p) =>
+                  p.purpose === 'Community Seller Settlement' &&
+                  p.sellerId === group.sellerId &&
+                  p.status === 'pending'
+              );
+              const pendingToSellerAmt = pendingToSeller.reduce((s, p) => s + p.amount, 0);
+              const itemsText = Object.entries(group.itemCounts)
+                .map(([name, qty]) => `${qty}× ${name}`)
+                .join(', ');
+
+              return (
+                <div
+                  key={group.sellerId}
+                  className="p-4 sm:px-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+                >
+                  <div className="space-y-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-bold text-stone-900 dark:text-stone-100">
+                        Seller: {group.sellerName}
+                      </span>
+                      <span className="px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 text-[11px] font-semibold">
+                        {group.orderIds.length} unpaid order{group.orderIds.length === 1 ? '' : 's'}
+                      </span>
+                      <span className="text-xs text-stone-500 dark:text-stone-400">
+                        Due {group.dueLabel}
+                      </span>
+                      {group.paidSoFar > 0 && (
+                        <span className="px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 text-[11px] font-semibold">
+                          Paid {formatPHP(group.paidSoFar)} / {formatPHP(group.grossDebt)}
+                        </span>
+                      )}
+                      {pendingToSeller.length > 0 && (
+                        <span className="px-2 py-0.5 rounded-full bg-teal-100 dark:bg-teal-950/60 text-teal-800 dark:text-teal-300 text-[11px] font-semibold">
+                          Awaiting seller approval: {formatPHP(pendingToSellerAmt, true)}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-stone-600 dark:text-stone-400">
+                      Items: {itemsText}
+                    </p>
+                    <p className="text-[11px] text-stone-400 font-mono">
+                      Orders: {group.orderIds.join(', ')}
+                    </p>
+                  </div>
+
+                  <div className="flex items-center justify-between sm:justify-end gap-3 shrink-0">
+                    <div className="text-left sm:text-right">
+                      <div className="text-[11px] text-stone-500 dark:text-stone-400">
+                        Owed to {group.sellerName}
+                      </div>
+                      <div className="text-base font-extrabold font-mono tabular-nums text-amber-600 dark:text-amber-400">
+                        {formatPHP(group.totalOwed, true)}
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => openPaySellerModal(group)}
+                      className="min-h-[40px] px-4 py-2 rounded-xl bg-teal-700 hover:bg-teal-800 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <CreditCard className="w-3.5 h-3.5" />
+                      <span>Pay {group.sellerName.split(' ')[0]}</span>
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Simple 3-Step How To Pay Store Debt Guide */}
       {currentUser.debtBalance > 0 && (
         <div className="rounded-2xl border border-teal-200 dark:border-teal-800/70 bg-teal-50/40 dark:bg-teal-950/25 p-4 sm:p-5 space-y-3">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div className="flex items-center gap-2 text-sm font-bold text-stone-900 dark:text-stone-100">
               <Wallet className="w-4 h-4 text-teal-700 dark:text-teal-400 shrink-0" />
-              <span>How to Pay Your Store Balance in 3 Easy Steps</span>
+              <span>How to Pay Your Storefront Debt in 3 Easy Steps</span>
             </div>
             <span className="text-xs text-stone-500 dark:text-stone-400">
               Due dates every {dueDays[0]}th &amp; {dueDays[1]}th
@@ -321,7 +641,7 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
             <div className="rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] p-3">
               <div className="font-bold text-teal-700 dark:text-teal-400">Step 1: Send Money</div>
               <div className="mt-0.5 text-stone-600 dark:text-stone-300">
-                Tap &ldquo;Pay Balance&rdquo;, pick GCash / Maya / MariBank, and copy the number or scan QR.
+                Tap &ldquo;Pay Store Debt&rdquo;, pick GCash / Maya / MariBank, and copy the Store number or scan QR.
               </div>
             </div>
             <div className="rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] p-3">
@@ -333,7 +653,7 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
             <div className="rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] p-3">
               <div className="font-bold text-teal-700 dark:text-teal-400">Step 3: Balance Clears</div>
               <div className="mt-0.5 text-stone-600 dark:text-stone-300">
-                Admin confirms your receipt and your &ldquo;What I Owe&rdquo; number drops automatically!
+                Store Admin confirms your receipt and your Storefront Debt drops automatically!
               </div>
             </div>
           </div>
@@ -345,7 +665,7 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
         <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-stone-50 dark:bg-[#172523] p-4 sm:p-5 grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div>
             <div className="text-xs font-semibold text-stone-500 dark:text-stone-400">
-              Admin View: All Coworker Balances to Collect
+              Admin View: All Coworker Store Balances
             </div>
             <div className="mt-1 text-xl font-bold text-stone-900 dark:text-stone-100 font-mono tabular-nums">
               {formatPHP(totalCollectibles, true)}
@@ -362,15 +682,20 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
               {formatPHP(ownerTotalCommission, true)}
             </div>
             <div className="text-xs text-stone-500 dark:text-stone-400">
-              From coworker For-Sale items
+              Base ₱582 + marketplace shares (from coworker For-Sale items)
             </div>
           </div>
           <div>
             <div className="text-xs font-semibold text-stone-500 dark:text-stone-400">
-              Receipts Waiting Your Check
+              Store Receipts Waiting Check
             </div>
             <div className="mt-1 text-xl font-bold text-amber-600 dark:text-amber-400 font-mono tabular-nums">
-              {proofs.filter((p) => p.status === 'pending').length} Receipts
+              {
+                proofs.filter(
+                  (p) => p.status === 'pending' && p.purpose !== 'Community Seller Settlement'
+                ).length
+              }{' '}
+              Receipts
             </div>
             <div className="text-xs text-stone-500 dark:text-stone-400">
               Open Admin Config to confirm
@@ -459,9 +784,12 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
                 className="min-h-[38px] rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-[#172523] px-3 text-xs text-stone-800 dark:text-stone-200"
               >
                 <option value="all">Status: Everything</option>
-                <option value="Confirmed">Status: Confirmed</option>
+                <option value="Pending Seller Confirmation">Status: Waiting Seller Confirmation</option>
+                <option value="Pending Admin Review">Status: Waiting Admin Confirmation</option>
                 <option value="Pending Payment Proof">Status: Waiting Receipt Check</option>
+                <option value="Confirmed">Status: Confirmed</option>
                 <option value="Completed">Status: Done / Delivered</option>
+                <option value="Rejected">Status: Rejected</option>
               </select>
             </div>
           </div>
@@ -474,7 +802,10 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
             <div className="divide-y divide-stone-200 dark:divide-stone-800">
               {filteredOrders.map((ord) => {
                 const isExpanded = expandedOrderId === ord.id;
-                const statusText = ord.deliveryStatus ?? ord.status;
+                const statusText =
+                  ord.status === 'Pending Seller Confirmation'
+                    ? 'Waiting Seller Confirmation'
+                    : ord.deliveryStatus ?? ord.status;
                 return (
                   <div key={ord.id} className="p-4 sm:p-5 space-y-3">
                     {/* Top Row: Items & Total Price */}
@@ -488,11 +819,39 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
                             className={`px-2 py-0.5 rounded-md font-bold text-[11px] ${
                               statusText === 'Delivered' || statusText === 'Completed'
                                 ? 'bg-emerald-100 dark:bg-emerald-950/70 text-emerald-800 dark:text-emerald-300'
-                                : 'bg-amber-100 dark:bg-amber-950/70 text-amber-800 dark:text-amber-300'
+                                : ord.status === 'Rejected'
+                                  ? 'bg-red-100 dark:bg-red-950/70 text-red-800 dark:text-red-300'
+                                  : 'bg-amber-100 dark:bg-amber-950/70 text-amber-800 dark:text-amber-300'
                             }`}
                           >
                             {statusText}
                           </span>
+                          {ord.source === 'marketplace' && (
+                            <span className="px-2 py-0.5 rounded-md bg-teal-50 dark:bg-teal-950/60 text-teal-800 dark:text-teal-300 text-[11px] font-semibold">
+                              Community · Seller: {ord.sellerName ?? 'Coworker'}
+                            </span>
+                          )}
+                          {ord.source === 'marketplace' &&
+                            ord.paymentMethod === PaymentMethod.Debt &&
+                            (ord.status === 'Confirmed' || ord.status === 'Completed') && (
+                              <span
+                                className={`px-2 py-0.5 rounded-md text-[11px] font-semibold ${
+                                  ord.debtSettled
+                                    ? 'bg-emerald-100 dark:bg-emerald-950/70 text-emerald-800 dark:text-emerald-300'
+                                    : (ord.debtPaidAmount ?? 0) > 0
+                                      ? 'bg-teal-100 dark:bg-teal-950/70 text-teal-800 dark:text-teal-300'
+                                      : 'bg-amber-100 dark:bg-amber-950/70 text-amber-800 dark:text-amber-300'
+                                }`}
+                              >
+                                {ord.debtSettled
+                                  ? 'Debt Settled'
+                                  : (ord.debtPaidAmount ?? 0) > 0
+                                    ? `Partial Paid (${formatPHP(ord.debtPaidAmount ?? 0)} / ${formatPHP(
+                                        getOrderItemsSubtotal(ord)
+                                      )})`
+                                    : 'Unpaid Debt'}
+                              </span>
+                            )}
                         </div>
                         <div className="mt-1 text-base font-bold text-stone-900 dark:text-stone-100">
                           {ord.items.map((i) => `${i.quantity}× ${i.name}`).join(', ')}
@@ -618,10 +977,16 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
             </div>
             <button
               type="button"
-              onClick={() => openPayModalWithAmount(currentUser.debtBalance)}
+              onClick={() =>
+                currentUser.debtBalance === 0 && sellerDebtGroups.length > 0
+                  ? openPaySellerModal(sellerDebtGroups[0])
+                  : openPayModalWithAmount(currentUser.debtBalance)
+              }
               className="min-h-[36px] px-3.5 py-1.5 rounded-xl bg-teal-700 text-xs font-semibold text-white hover:bg-teal-800 self-start cursor-pointer"
             >
-              + Upload New Receipt
+              {currentUser.debtBalance === 0 && sellerDebtGroups.length > 0
+                ? '+ Pay Community Seller'
+                : '+ Upload Store Receipt'}
             </button>
           </div>
 
@@ -631,46 +996,52 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
             </div>
           ) : (
             <div className="divide-y divide-stone-200 dark:divide-stone-800">
-              {userProofs.map((prf) => (
-                <div
-                  key={prf.id}
-                  className="p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
-                >
-                  <div className="flex items-center gap-3.5 min-w-0">
-                    <img
-                      src={prf.imageDataUrl}
-                      alt={`Receipt ${prf.referenceNo}`}
-                      className="w-14 h-14 rounded-xl object-cover border border-stone-200 dark:border-stone-700 shrink-0"
-                    />
-                    <div className="min-w-0 space-y-0.5">
-                      <div className="text-sm font-bold text-stone-900 dark:text-stone-100 truncate">
-                        {prf.channel} — {prf.purpose}
-                      </div>
-                      <div className="text-xs text-stone-500 dark:text-stone-400 font-mono truncate">
-                        Ref: {prf.referenceNo} · {prf.submittedAt}
-                      </div>
-                      <div
-                        className={`text-xs font-bold ${
-                          prf.status === 'approved'
-                            ? 'text-emerald-700 dark:text-emerald-400'
+              {userProofs.map((prf) => {
+                const isSellerProof = prf.purpose === 'Community Seller Settlement';
+                return (
+                  <div
+                    key={prf.id}
+                    className="p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                  >
+                    <div className="flex items-center gap-3.5 min-w-0">
+                      <img
+                        src={prf.imageDataUrl}
+                        alt={`Receipt ${prf.referenceNo}`}
+                        className="w-14 h-14 rounded-xl object-cover border border-stone-200 dark:border-stone-700 shrink-0"
+                      />
+                      <div className="min-w-0 space-y-0.5">
+                        <div className="text-sm font-bold text-stone-900 dark:text-stone-100 truncate">
+                          {prf.channel} — {prf.purpose}
+                          {isSellerProof && prf.sellerName ? ` (${prf.sellerName})` : ''}
+                        </div>
+                        <div className="text-xs text-stone-500 dark:text-stone-400 font-mono truncate">
+                          Ref: {prf.referenceNo} · {prf.submittedAt}
+                        </div>
+                        <div
+                          className={`text-xs font-bold ${
+                            prf.status === 'approved'
+                              ? 'text-emerald-700 dark:text-emerald-400'
+                              : prf.status === 'rejected'
+                                ? 'text-red-600 dark:text-red-400'
+                                : 'text-amber-700 dark:text-amber-400'
+                          }`}
+                        >
+                          {prf.status === 'approved'
+                            ? 'Approved & Settled!'
                             : prf.status === 'rejected'
-                              ? 'text-red-600 dark:text-red-400'
-                              : 'text-amber-700 dark:text-amber-400'
-                        }`}
-                      >
-                        {prf.status === 'approved'
-                          ? 'Approved & Counted!'
-                          : prf.status === 'rejected'
-                            ? 'Not Accepted — Please upload a clearer photo'
-                            : 'Waiting for Admin to Check'}
+                              ? 'Not Accepted — Please upload a clearer photo'
+                              : isSellerProof
+                                ? `Waiting for ${prf.sellerName || 'Seller'} to Verify`
+                                : 'Waiting for Store Admin to Check'}
+                        </div>
                       </div>
                     </div>
+                    <div className="text-lg font-extrabold text-stone-900 dark:text-stone-100 font-mono tabular-nums sm:text-right shrink-0">
+                      {formatPHP(prf.amount, true)}
+                    </div>
                   </div>
-                  <div className="text-lg font-extrabold text-stone-900 dark:text-stone-100 font-mono tabular-nums sm:text-right shrink-0">
-                    {formatPHP(prf.amount, true)}
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -802,7 +1173,188 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
               disabled={!payImage || !payRef.trim() || Number(payAmount) <= 0}
               className="w-full min-h-[44px] rounded-xl bg-teal-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-800 disabled:bg-stone-200 dark:disabled:bg-stone-800 disabled:text-stone-500 cursor-pointer"
             >
-              Send Receipt to Admin
+              Send Store Debt Receipt to Admin
+            </button>
+          </form>
+        </div>
+      )}
+
+      {/* Pay Community Seller Modal */}
+      {payingSellerGroup && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/60 p-4 backdrop-blur-xs overflow-y-auto">
+          <form
+            onSubmit={(e) => void handleSellerProofSubmit(e)}
+            className="w-full max-w-md rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] p-5 sm:p-6 shadow-xl space-y-4 my-auto"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-lg font-bold text-stone-900 dark:text-stone-100">
+                  Pay {payingSellerGroup.sellerName}
+                </h3>
+                <p className="text-xs text-stone-500 dark:text-stone-400">
+                  Community Seller Debt Settlement · Separate from Store Debt
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPayingSellerGroup(null)}
+                className="min-h-[40px] min-w-[40px] flex items-center justify-center rounded-lg text-stone-500 dark:text-stone-400 hover:bg-stone-100 dark:hover:bg-stone-800 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="rounded-xl border border-stone-200 dark:border-stone-800 bg-stone-50 dark:bg-[#172523] p-3.5 space-y-1.5 text-xs">
+              <div className="font-bold text-stone-800 dark:text-stone-100">
+                Seller Payout Details
+              </div>
+              {loadingSellerCfg ? (
+                <div className="text-stone-500 dark:text-stone-400">
+                  Loading seller payment numbers...
+                </div>
+              ) : (
+                <>
+                  {sellerPayConfig?.gcashNumber && (
+                    <div className="text-stone-700 dark:text-stone-200">
+                      <strong>GCash:</strong>{' '}
+                      <span className="font-mono">{sellerPayConfig.gcashNumber}</span>
+                    </div>
+                  )}
+                  {sellerPayConfig?.mayaNumber && (
+                    <div className="text-stone-700 dark:text-stone-200">
+                      <strong>Maya:</strong>{' '}
+                      <span className="font-mono">{sellerPayConfig.mayaNumber}</span>
+                    </div>
+                  )}
+                  {sellerPayConfig?.paymentNotes && (
+                    <div className="text-stone-600 dark:text-stone-300">
+                      <strong>Notes:</strong> {sellerPayConfig.paymentNotes}
+                    </div>
+                  )}
+                  {!sellerPayConfig?.gcashNumber &&
+                    !sellerPayConfig?.mayaNumber &&
+                    !sellerPayConfig?.paymentNotes && (
+                      <div className="text-stone-600 dark:text-stone-300">
+                        {payingSellerGroup.listingPaymentHint ||
+                          `Send directly to ${payingSellerGroup.sellerName} (Cash / GCash / Maya) and upload your receipt below.`}
+                      </div>
+                    )}
+                </>
+              )}
+              <div className="pt-1 text-[11px] text-stone-500 dark:text-stone-400 font-mono">
+                Orders covered: {payingSellerGroup.orderIds.join(', ')}
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-stone-700 dark:text-stone-300 mb-1">
+                1. Amount Paid to {payingSellerGroup.sellerName.split(' ')[0]} (₱)
+              </label>
+              <input
+                type="number"
+                min="1"
+                required
+                value={sellerPayAmount}
+                onChange={(e) => setSellerPayAmount(e.target.value)}
+                className="w-full min-h-[42px] rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-[#172523] px-3 py-2 text-sm font-mono font-bold tabular-nums text-stone-900 dark:text-stone-100 focus:border-teal-700 focus:outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-stone-700 dark:text-stone-300 mb-1.5">
+                2. Payment Channel
+              </label>
+              <div className="grid grid-cols-3 gap-2">
+                {['GCash', 'Maya', 'Cash'].map((ch) => (
+                  <button
+                    key={ch}
+                    type="button"
+                    onClick={() => setSellerPayChannel(ch)}
+                    className={`min-h-[40px] rounded-xl border px-2 text-xs font-semibold cursor-pointer ${
+                      sellerPayChannel === ch
+                        ? 'border-teal-700 bg-teal-50 dark:bg-teal-950/60 text-teal-800 dark:text-teal-200'
+                        : 'border-stone-200 dark:border-stone-700 text-stone-600 dark:text-stone-300'
+                    }`}
+                  >
+                    {ch}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-stone-700 dark:text-stone-300 mb-1">
+                3. Receipt Reference / Cash Note
+              </label>
+              <input
+                type="text"
+                required
+                value={sellerPayRef}
+                onChange={(e) => setSellerPayRef(e.target.value)}
+                placeholder="e.g. GC-904821735 or Paid Cash at Pantry"
+                className="w-full min-h-[42px] rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-[#172523] px-3 py-2 text-sm font-mono text-stone-900 dark:text-stone-100 focus:border-teal-700 focus:outline-none"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <div className="text-xs font-semibold text-stone-700 dark:text-stone-300">
+                4. Upload Payment Screenshot / Proof
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="min-h-[40px] inline-flex items-center gap-2 rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-[#172523] px-3 py-2 text-xs font-semibold text-stone-700 dark:text-stone-200 cursor-pointer">
+                  <Upload className="w-3.5 h-3.5 text-teal-700 dark:text-teal-400" />
+                  <span>Upload Screenshot</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={handleSellerFileUpload}
+                    className="hidden"
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSellerPayImage(SAMPLE_RECEIPT_DATA_URL);
+                    if (!sellerPayRef) {
+                      setSellerPayRef(
+                        `${sellerPayChannel.slice(0, 2).toUpperCase()}-7731902`
+                      );
+                    }
+                    setSellerPayError('');
+                  }}
+                  className="min-h-[40px] rounded-xl border border-teal-200 dark:border-teal-800 bg-teal-50/60 dark:bg-teal-950/40 px-3 py-2 text-xs font-medium text-teal-800 dark:text-teal-300 cursor-pointer"
+                >
+                  Use Sample Receipt
+                </button>
+              </div>
+              {sellerPayImage && (
+                <img
+                  src={sellerPayImage}
+                  alt="Seller payment proof preview"
+                  className="w-20 h-20 rounded-lg object-cover border border-stone-200 dark:border-stone-700"
+                />
+              )}
+            </div>
+
+            {sellerPayError && (
+              <p className="text-xs font-medium text-red-600 dark:text-red-400">
+                {sellerPayError}
+              </p>
+            )}
+
+            <button
+              type="submit"
+              disabled={
+                submittingSellerProof ||
+                !sellerPayImage ||
+                !sellerPayRef.trim() ||
+                Number(sellerPayAmount) <= 0
+              }
+              className="w-full min-h-[44px] rounded-xl bg-teal-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-800 disabled:bg-stone-200 dark:disabled:bg-stone-800 disabled:text-stone-500 cursor-pointer"
+            >
+              {submittingSellerProof
+                ? 'Sending to Seller...'
+                : `Send Receipt to ${payingSellerGroup.sellerName.split(' ')[0]}`}
             </button>
           </form>
         </div>

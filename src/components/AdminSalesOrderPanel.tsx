@@ -1,13 +1,18 @@
 import React, { useMemo, useState } from 'react';
 import {
+  AlertTriangle,
+  Check,
   CheckCircle2,
+  Clock3,
   Minus,
+  PackageCheck,
   Plus,
   ReceiptText,
   ScanBarcode,
   Search,
   ShoppingBag,
   Trash2,
+  Truck,
   UserCheck,
   UserRound,
   X,
@@ -15,12 +20,17 @@ import {
 import {
   FulfillmentType,
   PaymentMethod,
+  PaymentProof,
   StoreConfig,
   StoreItem,
   StoreOrder,
   UserAccount,
 } from '../types';
-import { formatPHP } from '../utils/format';
+import {
+  formatPHP,
+  isOrderPendingAdminConfirmation,
+  isOrderPendingSellerConfirmation,
+} from '../utils/format';
 import { BarcodeScannerModal } from './BarcodeScannerModal';
 import { ProductImage } from './ProductImage';
 
@@ -28,7 +38,10 @@ interface AdminSalesOrderPanelProps {
   items: StoreItem[];
   users: UserAccount[];
   orders: StoreOrder[];
+  proofs: PaymentProof[];
   storeConfig: StoreConfig;
+  onApproveOrder: (orderId: string) => Promise<void>;
+  onRejectOrder: (orderId: string) => Promise<void>;
   onCreateManualSale: (payload: {
     customerMode: 'walkin' | 'coworker';
     customerId?: string;
@@ -46,7 +59,10 @@ export const AdminSalesOrderPanel: React.FC<AdminSalesOrderPanelProps> = ({
   items,
   users,
   orders,
+  proofs,
   storeConfig,
+  onApproveOrder,
+  onRejectOrder,
   onCreateManualSale,
   onNotifySuccess,
   onNotifyError,
@@ -71,6 +87,8 @@ export const AdminSalesOrderPanel: React.FC<AdminSalesOrderPanelProps> = ({
   );
   const [cashTenderedInput, setCashTenderedInput] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [busyOrderId, setBusyOrderId] = useState<string | null>(null);
+  const [recentFilter, setRecentFilter] = useState<'all' | 'walkin'>('all');
   const [lastCreatedOrder, setLastCreatedOrder] = useState<StoreOrder | null>(null);
 
   const categories = useMemo(
@@ -219,19 +237,235 @@ export const AdminSalesOrderPanel: React.FC<AdminSalesOrderPanelProps> = ({
     }
   };
 
-  const walkInOrders = useMemo(
-    () =>
-      orders.filter(
+  const pendingOrders = useMemo(
+    () => orders.filter(isOrderPendingAdminConfirmation),
+    [orders]
+  );
+
+  const recentOrders = useMemo(() => {
+    const base = orders.filter(
+      (o) => !isOrderPendingAdminConfirmation(o) && !isOrderPendingSellerConfirmation(o)
+    );
+    if (recentFilter === 'walkin') {
+      return base.filter(
         (o) =>
           o.userId === 'walk-in' ||
           o.assignedRunner === 'Counter B Walk-in' ||
           o.logs?.some((lg) => lg.event.toLowerCase().includes('manual walk-in'))
-      ),
-    [orders]
-  );
+      );
+    }
+    return base;
+  }, [orders, recentFilter]);
+
+  const handleApprovePending = async (order: StoreOrder) => {
+    setBusyOrderId(order.id);
+    try {
+      await onApproveOrder(order.id);
+      onNotifySuccess(
+        order.fulfillment === FulfillmentType.Pickup
+          ? `Order ${order.id} approved & stock released (Counter B Pickup completed — not queued to Delivery Staff).`
+          : `Order ${order.id} approved, stock released, and dispatched to Delivery Staff.`
+      );
+    } catch (err) {
+      onNotifyError(
+        err instanceof Error ? err.message : `Could not approve order ${order.id}.`
+      );
+    } finally {
+      setBusyOrderId(null);
+    }
+  };
+
+  const handleRejectPending = async (order: StoreOrder) => {
+    setBusyOrderId(order.id);
+    try {
+      await onRejectOrder(order.id);
+      onNotifySuccess(`Order ${order.id} rejected. No stock was deducted.`);
+    } catch (err) {
+      onNotifyError(
+        err instanceof Error ? err.message : `Could not reject order ${order.id}.`
+      );
+    } finally {
+      setBusyOrderId(null);
+    }
+  };
 
   return (
     <div className="space-y-6">
+      {/* Section 1: Pending Storefront Orders Awaiting Confirmation & Stock Release */}
+      <div className="rounded-2xl border border-amber-200 dark:border-amber-800/70 bg-white dark:bg-[#121D1B] overflow-hidden">
+        <div className="px-6 py-4 border-b border-amber-200/80 dark:border-amber-800/60 bg-amber-50/70 dark:bg-amber-950/25 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div className="flex items-center gap-2.5">
+            <div className="w-9 h-9 rounded-xl bg-amber-600 text-white flex items-center justify-center shrink-0">
+              <Clock3 className="w-4 h-4" />
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-stone-900 dark:text-stone-100">
+                Orders Pending Confirmation &amp; Stock Release ({pendingOrders.length})
+              </h2>
+              <p className="text-xs text-stone-600 dark:text-stone-400">
+                Storefront orders stay held here before stock is deducted. Approving Pickup completes the order without entering Delivery Staff; approving Delivery releases it to runners.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {pendingOrders.length === 0 ? (
+          <div className="p-8 text-center">
+            <PackageCheck className="w-8 h-8 text-emerald-600/70 dark:text-emerald-400/70 mx-auto" />
+            <p className="mt-2 text-sm font-semibold text-stone-900 dark:text-stone-100">
+              No pending orders waiting for confirmation
+            </p>
+            <p className="mt-0.5 text-xs text-stone-500 dark:text-stone-400">
+              New coworker Pickup and Delivery orders placed from the Storefront will appear here for your approval before stock release.
+            </p>
+          </div>
+        ) : (
+          <div className="divide-y divide-stone-200 dark:divide-stone-800">
+            {pendingOrders.map((ord) => {
+              const linkedProof = proofs.find((p) => p.orderId === ord.id);
+              const stockIssues =
+                ord.source === 'store'
+                  ? ord.items
+                      .map((line) => {
+                        const inv = items.find((i) => i.id === line.itemId);
+                        const avail = inv?.stock ?? 0;
+                        return avail < line.quantity
+                          ? `${line.name} (needs ${line.quantity}, ${avail} left)`
+                          : null;
+                      })
+                      .filter((x): x is string => x !== null)
+                  : [];
+              const isBusy = busyOrderId === ord.id;
+              const isPickup = ord.fulfillment === FulfillmentType.Pickup;
+
+              return (
+                <div
+                  key={ord.id}
+                  className="p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4"
+                >
+                  <div className="space-y-2 min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <span className="font-mono font-bold text-stone-900 dark:text-stone-100">
+                        {ord.id}
+                      </span>
+                      <span className="px-2 py-0.5 rounded-md font-semibold bg-amber-100 dark:bg-amber-950/70 text-amber-800 dark:text-amber-300">
+                        {ord.status}
+                      </span>
+                      <span
+                        className={`px-2 py-0.5 rounded-md font-semibold inline-flex items-center gap-1 ${
+                          isPickup
+                            ? 'bg-stone-100 dark:bg-[#172523] text-stone-700 dark:text-stone-200'
+                            : 'bg-teal-50 dark:bg-teal-950/60 text-teal-800 dark:text-teal-300'
+                        }`}
+                      >
+                        {isPickup ? (
+                          <ShoppingBag className="w-3 h-3" />
+                        ) : (
+                          <Truck className="w-3 h-3" />
+                        )}
+                        {isPickup ? 'Pick Up at Counter B' : 'Desk Delivery'}
+                      </span>
+                      <span className="text-stone-500 dark:text-stone-400">{ord.createdAt}</span>
+                    </div>
+
+                    <div className="text-base font-bold text-stone-900 dark:text-stone-100">
+                      {ord.userName} —{' '}
+                      <span className="font-mono tabular-nums">
+                        {formatPHP(ord.totalAmount, true)}
+                      </span>{' '}
+                      <span className="text-xs font-semibold text-stone-500 dark:text-stone-400">
+                        via {ord.paymentMethod}
+                      </span>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                      {ord.items.map((line) => {
+                        const inv = items.find((i) => i.id === line.itemId);
+                        const avail = inv?.stock ?? 0;
+                        const low = ord.source === 'store' && avail < line.quantity;
+                        return (
+                          <span
+                            key={`${ord.id}-${line.itemId}`}
+                            className={`text-xs px-2.5 py-1 rounded-lg border tabular-nums ${
+                              low
+                                ? 'border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300 font-semibold'
+                                : 'border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-[#172523] text-stone-700 dark:text-stone-200'
+                            }`}
+                          >
+                            {line.quantity}× {line.name}
+                            {ord.source === 'store' && inv ? ` (Stock: ${avail})` : ''}
+                          </span>
+                        );
+                      })}
+                    </div>
+
+                    {ord.deliveryNote && (
+                      <div className="text-xs text-stone-600 dark:text-stone-400">
+                        Location Note: <strong className="text-stone-900 dark:text-stone-200">{ord.deliveryNote}</strong>
+                      </div>
+                    )}
+
+                    {linkedProof && (
+                      <div className="inline-flex items-center gap-3 rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-[#172523] p-2.5 text-xs">
+                        <img
+                          src={linkedProof.imageDataUrl}
+                          alt={`Proof ${linkedProof.referenceNo}`}
+                          className="w-11 h-11 rounded-lg object-cover border border-stone-200 dark:border-stone-700 shrink-0"
+                        />
+                        <div>
+                          <div className="font-semibold text-stone-900 dark:text-stone-100">
+                            {linkedProof.channel} Proof · Ref:{' '}
+                            <span className="font-mono">{linkedProof.referenceNo}</span>
+                          </div>
+                          <div className="text-[11px] text-stone-500 dark:text-stone-400">
+                            Proof status: {linkedProof.status} · Approving order also confirms proof
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {stockIssues.length > 0 && (
+                      <div className="flex items-center gap-1.5 text-xs font-semibold text-red-600 dark:text-red-400">
+                        <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                        <span>Insufficient stock: {stockIssues.join(', ')}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      disabled={isBusy}
+                      onClick={() => void handleRejectPending(ord)}
+                      className="min-h-[40px] inline-flex items-center gap-1.5 rounded-xl border border-stone-200 dark:border-stone-700 px-3.5 py-2 text-xs font-semibold text-stone-700 dark:text-stone-200 hover:bg-red-50 dark:hover:bg-red-950/40 hover:text-red-700 dark:hover:text-red-300 disabled:opacity-45 cursor-pointer"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                      <span>Reject</span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isBusy || stockIssues.length > 0}
+                      onClick={() => void handleApprovePending(ord)}
+                      className="min-h-[40px] inline-flex items-center gap-1.5 rounded-xl bg-teal-700 px-4 py-2 text-xs font-semibold text-white hover:bg-teal-800 disabled:opacity-45 cursor-pointer"
+                    >
+                      <Check className="w-3.5 h-3.5" />
+                      <span>
+                        {isBusy
+                          ? 'Processing...'
+                          : isPickup
+                            ? 'Approve & Release (Pickup Done)'
+                            : 'Approve, Release Stock & Dispatch'}
+                      </span>
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Section 2: Walk-In Sales Order POS */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         {/* Left: Item Picker & Barcode Scan-to-Add */}
         <div className="lg:col-span-7 rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] p-5 sm:p-6 space-y-4">
@@ -643,15 +877,41 @@ export const AdminSalesOrderPanel: React.FC<AdminSalesOrderPanelProps> = ({
         </form>
       </div>
 
-      {/* Recent Walk-In & Counter Sales Table */}
+      {/* Section 3: Recent Approved & Walk-In Sales Orders Table */}
       <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] overflow-hidden">
-        <div className="px-6 py-4 border-b border-stone-200 dark:border-stone-800">
-          <h3 className="text-base font-bold text-stone-900 dark:text-stone-100">
-            Recent Walk-In &amp; Manual Sales Orders ({walkInOrders.length})
-          </h3>
-          <p className="text-xs text-stone-500 dark:text-stone-400">
-            Automatically synced to Firestore orders, inventory stock, and Excel/PDF sales reports.
-          </p>
+        <div className="px-6 py-4 border-b border-stone-200 dark:border-stone-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <h3 className="text-base font-bold text-stone-900 dark:text-stone-100">
+              Confirmed, Released &amp; Walk-In Sales Orders ({recentOrders.length})
+            </h3>
+            <p className="text-xs text-stone-500 dark:text-stone-400">
+              Automatically synced to Firestore orders, inventory stock, and Excel/PDF sales reports.
+            </p>
+          </div>
+          <div className="flex items-center gap-1 p-1 rounded-xl bg-stone-100 dark:bg-[#172523] self-start">
+            <button
+              type="button"
+              onClick={() => setRecentFilter('all')}
+              className={`min-h-[32px] px-3 rounded-lg text-xs font-semibold cursor-pointer ${
+                recentFilter === 'all'
+                  ? 'bg-white dark:bg-teal-700 text-stone-900 dark:text-white shadow-xs'
+                  : 'text-stone-600 dark:text-stone-300'
+              }`}
+            >
+              All Sales Orders
+            </button>
+            <button
+              type="button"
+              onClick={() => setRecentFilter('walkin')}
+              className={`min-h-[32px] px-3 rounded-lg text-xs font-semibold cursor-pointer ${
+                recentFilter === 'walkin'
+                  ? 'bg-white dark:bg-teal-700 text-stone-900 dark:text-white shadow-xs'
+                  : 'text-stone-600 dark:text-stone-300'
+              }`}
+            >
+              Walk-In Only
+            </button>
+          </div>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
@@ -660,12 +920,13 @@ export const AdminSalesOrderPanel: React.FC<AdminSalesOrderPanelProps> = ({
                 <th className="py-3 px-5">Order ID</th>
                 <th className="py-3 px-5">Customer</th>
                 <th className="py-3 px-5">Items</th>
-                <th className="py-3 px-5">Payment</th>
+                <th className="py-3 px-5">Payment &amp; Fulfillment</th>
+                <th className="py-3 px-5">Status</th>
                 <th className="py-3 px-5 text-right">Total</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-stone-200 dark:divide-stone-800 text-sm">
-              {walkInOrders.slice(0, 12).map((o) => (
+              {recentOrders.slice(0, 20).map((o) => (
                 <tr key={o.id}>
                   <td className="py-3 px-5 font-mono text-xs font-semibold text-stone-900 dark:text-stone-100">
                     <div>{o.id}</div>
@@ -682,18 +943,33 @@ export const AdminSalesOrderPanel: React.FC<AdminSalesOrderPanelProps> = ({
                   <td className="py-3 px-5 text-xs text-stone-600 dark:text-stone-300">
                     {o.paymentMethod} · {o.fulfillment}
                   </td>
+                  <td className="py-3 px-5 text-xs">
+                    <span
+                      className={`px-2 py-0.5 rounded-md font-semibold ${
+                        o.status === 'Rejected'
+                          ? 'bg-red-100 dark:bg-red-950/60 text-red-700 dark:text-red-300'
+                          : o.status === 'Completed' || o.deliveryStatus === 'Delivered'
+                            ? 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300'
+                            : 'bg-teal-100 dark:bg-teal-950/60 text-teal-800 dark:text-teal-300'
+                      }`}
+                    >
+                      {o.fulfillment === FulfillmentType.Delivery && o.deliveryStatus
+                        ? o.deliveryStatus
+                        : o.status}
+                    </span>
+                  </td>
                   <td className="py-3 px-5 text-right font-mono font-bold tabular-nums text-stone-900 dark:text-stone-100">
                     {formatPHP(o.totalAmount, true)}
                   </td>
                 </tr>
               ))}
-              {walkInOrders.length === 0 && (
+              {recentOrders.length === 0 && (
                 <tr>
                   <td
-                    colSpan={5}
+                    colSpan={6}
                     className="py-8 text-center text-xs text-stone-500 dark:text-stone-400"
                   >
-                    No manual walk-in sales orders recorded yet.
+                    No confirmed or walk-in sales orders recorded yet.
                   </td>
                 </tr>
               )}

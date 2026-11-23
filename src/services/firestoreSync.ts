@@ -40,8 +40,10 @@ import {
   LoanRecord,
   MarketplaceListing,
   NotificationItem,
+  OrderLogEntry,
   PautanganSettings,
   PaymentProof,
+  SellerConfig,
   StockAdjustmentLog,
   StoreConfig,
   StoreItem,
@@ -362,21 +364,10 @@ export function subscribePublicStoreData(handlers: {
   onItems: (items: StoreItem[]) => void;
   onStoreConfig: (config: StoreConfig & { dueDays?: [number, number] }) => void;
 }): Unsubscribe {
-  let latestItems: StoreItem[] | null = null;
-  let configExists: boolean | null = null;
-
-  const emitItemsIfReady = () => {
-    if (latestItems === null) return;
-    if (latestItems.length > 0 || configExists === true) {
-      handlers.onItems(latestItems);
-    }
-  };
-
   const unsubItems = onSnapshot(
     collection(db, 'storeItems'),
     (snap) => {
-      latestItems = snap.docs.map((d) => d.data() as StoreItem);
-      emitItemsIfReady();
+      handlers.onItems(snap.docs.map((d) => d.data() as StoreItem));
     },
     (err) => handleFirestoreError(err, OperationType.LIST, 'storeItems')
   );
@@ -384,11 +375,9 @@ export function subscribePublicStoreData(handlers: {
   const unsubConfig = onSnapshot(
     doc(db, 'config', 'store'),
     (snap) => {
-      configExists = snap.exists();
       if (snap.exists()) {
         handlers.onStoreConfig(snap.data() as StoreConfig & { dueDays?: [number, number] });
       }
-      emitItemsIfReady();
     },
     (err) => handleFirestoreError(err, OperationType.GET, 'config/store')
   );
@@ -428,6 +417,7 @@ export function subscribeAuthenticatedData(
     onInternalApps: (apps: InternalApp[]) => void;
     onChatThreads: (threads: ChatThread[]) => void;
     onStockAdjustments?: (logs: StockAdjustmentLog[]) => void;
+    onSellerConfig?: (config: SellerConfig | null) => void;
   }
 ): Unsubscribe {
   const unsubs: Unsubscribe[] = [];
@@ -498,36 +488,97 @@ export function subscribeAuthenticatedData(
     handlers.onStockAdjustments?.([]);
   }
 
-  // 4. Orders
-  const ordersQuery = isDelivery
-    ? collection(db, 'orders')
-    : query(collection(db, 'orders'), where('userId', '==', uid));
-  unsubs.push(
-    onSnapshot(
-      ordersQuery,
-      (snap) => {
-        const list = snap.docs
-          .map((d) => d.data() as StoreOrder)
-          .sort((a, b) => (b.orderDateIso || '').localeCompare(a.orderDateIso || ''));
-        handlers.onOrders(list);
-      },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'orders')
-    )
-  );
+  // 4. Orders (Buyers see their own purchases; Community Sellers also see orders for their listings)
+  if (isDelivery) {
+    unsubs.push(
+      onSnapshot(
+        collection(db, 'orders'),
+        (snap) => {
+          const list = snap.docs
+            .map((d) => d.data() as StoreOrder)
+            .sort((a, b) => (b.orderDateIso || '').localeCompare(a.orderDateIso || ''));
+          handlers.onOrders(list);
+        },
+        (err) => handleFirestoreError(err, OperationType.LIST, 'orders')
+      )
+    );
+  } else {
+    let boughtOrders: StoreOrder[] = [];
+    let soldOrders: StoreOrder[] = [];
+    const emitMergedOrders = () => {
+      const merged = new Map<string, StoreOrder>();
+      for (const o of boughtOrders) merged.set(o.id, o);
+      for (const o of soldOrders) merged.set(o.id, o);
+      const list = Array.from(merged.values()).sort((a, b) =>
+        (b.orderDateIso || '').localeCompare(a.orderDateIso || '')
+      );
+      handlers.onOrders(list);
+    };
 
-  // 5. Payment Proofs
-  const proofsQuery = isAdmin
-    ? collection(db, 'paymentProofs')
-    : query(collection(db, 'paymentProofs'), where('userId', '==', uid));
-  unsubs.push(
-    onSnapshot(
-      proofsQuery,
-      (snap) => {
-        handlers.onProofs(snap.docs.map((d) => d.data() as PaymentProof));
-      },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'paymentProofs')
-    )
-  );
+    unsubs.push(
+      onSnapshot(
+        query(collection(db, 'orders'), where('userId', '==', uid)),
+        (snap) => {
+          boughtOrders = snap.docs.map((d) => d.data() as StoreOrder);
+          emitMergedOrders();
+        },
+        (err) => handleFirestoreError(err, OperationType.LIST, 'orders')
+      )
+    );
+    unsubs.push(
+      onSnapshot(
+        query(collection(db, 'orders'), where('sellerId', '==', uid)),
+        (snap) => {
+          soldOrders = snap.docs.map((d) => d.data() as StoreOrder);
+          emitMergedOrders();
+        },
+        (err) => handleFirestoreError(err, OperationType.LIST, 'orders')
+      )
+    );
+  }
+
+  // 5. Payment Proofs (Buyers see their own submissions; Community Sellers also see proofs submitted to them)
+  if (isAdmin) {
+    unsubs.push(
+      onSnapshot(
+        collection(db, 'paymentProofs'),
+        (snap) => {
+          handlers.onProofs(snap.docs.map((d) => d.data() as PaymentProof));
+        },
+        (err) => handleFirestoreError(err, OperationType.LIST, 'paymentProofs')
+      )
+    );
+  } else {
+    let mySubmittedProofs: PaymentProof[] = [];
+    let receivedSellerProofs: PaymentProof[] = [];
+    const emitMergedProofs = () => {
+      const merged = new Map<string, PaymentProof>();
+      for (const p of mySubmittedProofs) merged.set(p.id, p);
+      for (const p of receivedSellerProofs) merged.set(p.id, p);
+      handlers.onProofs(Array.from(merged.values()));
+    };
+
+    unsubs.push(
+      onSnapshot(
+        query(collection(db, 'paymentProofs'), where('userId', '==', uid)),
+        (snap) => {
+          mySubmittedProofs = snap.docs.map((d) => d.data() as PaymentProof);
+          emitMergedProofs();
+        },
+        (err) => handleFirestoreError(err, OperationType.LIST, 'paymentProofs')
+      )
+    );
+    unsubs.push(
+      onSnapshot(
+        query(collection(db, 'paymentProofs'), where('sellerId', '==', uid)),
+        (snap) => {
+          receivedSellerProofs = snap.docs.map((d) => d.data() as PaymentProof);
+          emitMergedProofs();
+        },
+        (err) => handleFirestoreError(err, OperationType.LIST, 'paymentProofs')
+      )
+    );
+  }
 
   // 6. Suggestions
   unsubs.push(
@@ -773,6 +824,19 @@ export function subscribeAuthenticatedData(
           mergeThreads();
         },
         (err) => handleFirestoreError(err, OperationType.LIST, 'chatThreads')
+      )
+    );
+  }
+
+  // 13. Seller Config (own user doc)
+  if (handlers.onSellerConfig) {
+    unsubs.push(
+      onSnapshot(
+        doc(db, 'sellerConfigs', uid),
+        (snap) => {
+          handlers.onSellerConfig?.(snap.exists() ? (snap.data() as SellerConfig) : null);
+        },
+        (err) => handleFirestoreError(err, OperationType.GET, `sellerConfigs/${uid}`)
       )
     );
   }
@@ -1047,6 +1111,177 @@ export async function removeMarketplaceListing(listingId: string): Promise<void>
   }
 }
 
+export async function updateSellerListingConfig(
+  listingId: string,
+  patch: Partial<
+    Pick<
+      MarketplaceListing,
+      | 'title'
+      | 'description'
+      | 'price'
+      | 'stock'
+      | 'paused'
+      | 'allowCash'
+      | 'allowDebt'
+      | 'pickupNote'
+      | 'paymentDetails'
+    >
+  >
+): Promise<void> {
+  try {
+    const sanitized = stripUndefined({
+      ...patch,
+      ...(patch.title !== undefined ? { title: clampString(patch.title.trim(), 140) } : {}),
+      ...(patch.description !== undefined
+        ? { description: clampString(patch.description.trim(), 600) }
+        : {}),
+      ...(patch.pickupNote !== undefined
+        ? { pickupNote: clampString(patch.pickupNote.trim(), 200) }
+        : {}),
+      ...(patch.paymentDetails !== undefined
+        ? { paymentDetails: clampString(patch.paymentDetails.trim(), 200) }
+        : {}),
+      updatedAt: new Date().toISOString(),
+    });
+    await updateDoc(doc(db, 'marketplaceListings', listingId), sanitized);
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, `marketplaceListings/${listingId}`);
+  }
+}
+
+export async function markMarketplaceOrderDebtSettled(
+  orderId: string,
+  debtSettled: boolean,
+  settledAt: string,
+  logs: OrderLogEntry[],
+  debtPaidAmount?: number
+): Promise<void> {
+  try {
+    await updateDoc(
+      doc(db, 'orders', orderId),
+      stripUndefined({
+        debtSettled,
+        ...(debtPaidAmount !== undefined
+          ? { debtPaidAmount: Math.max(0, Number(debtPaidAmount) || 0) }
+          : {}),
+        settledAt: clampString(settledAt, 80),
+        logs: logs.slice(-50),
+        updatedAt: new Date().toISOString(),
+      })
+    );
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, `orders/${orderId}`);
+  }
+}
+
+export async function approveSellerProofAndSettleOrders(
+  updatedProof: PaymentProof,
+  orderPatches: Array<{
+    orderId: string;
+    debtSettled: boolean;
+    debtPaidAmount: number;
+    settledAt?: string;
+    logs: OrderLogEntry[];
+  }>
+): Promise<void> {
+  const nowIso = new Date().toISOString();
+  try {
+    const batch = writeBatch(db);
+    batch.set(
+      doc(db, 'paymentProofs', updatedProof.id),
+      stripUndefined({
+        ...updatedProof,
+        updatedAt: nowIso,
+      }),
+      { merge: true }
+    );
+
+    for (const patch of orderPatches) {
+      batch.update(
+        doc(db, 'orders', patch.orderId),
+        stripUndefined({
+          debtSettled: patch.debtSettled,
+          debtPaidAmount: Math.max(0, Number(patch.debtPaidAmount) || 0),
+          ...(patch.settledAt !== undefined
+            ? { settledAt: clampString(patch.settledAt, 80) }
+            : {}),
+          logs: patch.logs.slice(-50),
+          updatedAt: nowIso,
+        })
+      );
+    }
+
+    await batch.commit();
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, `paymentProofs/${updatedProof.id}`);
+  }
+}
+
+export async function updateMarketplaceOrderConfirmation(
+  orderId: string,
+  patch: Partial<
+    Pick<
+      StoreOrder,
+      | 'status'
+      | 'deliveryStatus'
+      | 'assignedRunnerId'
+      | 'assignedRunner'
+      | 'deliveredAt'
+      | 'cashCollected'
+      | 'debtSettled'
+      | 'settledAt'
+      | 'logs'
+    >
+  >
+): Promise<void> {
+  try {
+    await updateDoc(
+      doc(db, 'orders', orderId),
+      stripUndefined({
+        ...patch,
+        ...(patch.logs ? { logs: patch.logs.slice(-50) } : {}),
+        updatedAt: new Date().toISOString(),
+      })
+    );
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, `orders/${orderId}`);
+  }
+}
+
+export async function getSellerConfigById(sellerId: string): Promise<SellerConfig | null> {
+  if (!sellerId) return null;
+  try {
+    const snap = await getDoc(doc(db, 'sellerConfigs', sellerId));
+    return snap.exists() ? (snap.data() as SellerConfig) : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function saveSellerConfig(config: SellerConfig): Promise<void> {
+  try {
+    const payload = stripUndefined({
+      userId: config.userId,
+      gcashNumber: clampString(config.gcashNumber?.trim(), 60),
+      mayaNumber: clampString(config.mayaNumber?.trim(), 60),
+      paymentNotes: clampString(config.paymentNotes?.trim(), 300),
+      defaultPickupNote: clampString(config.defaultPickupNote?.trim(), 200),
+      defaultReminderTemplate: clampString(
+        config.defaultReminderTemplate.trim() ||
+          'Hi {buyer}, friendly reminder to settle {amount} for {item} via Cash or GCash/Maya.',
+        300
+      ),
+      defaultAllowCash: Boolean(config.defaultAllowCash),
+      defaultAllowDebt: Boolean(config.defaultAllowDebt),
+      notifyOnNewSale: Boolean(config.notifyOnNewSale),
+      updatedAt: new Date().toISOString(),
+    });
+    await setDoc(doc(db, 'sellerConfigs', config.userId), payload, { merge: true });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, `sellerConfigs/${config.userId}`);
+  }
+}
+
 export async function saveEWalletPost(post: EWalletPost): Promise<void> {
   try {
     await setDoc(
@@ -1140,3 +1375,200 @@ export async function toggleInternalAppInstalled(
     handleFirestoreError(err, OperationType.UPDATE, `internalApps/${appId}`);
   }
 }
+
+export async function syncOwnerCommissionToStoreConfig(
+  ownerCommissionEarned: number
+): Promise<void> {
+  try {
+    await updateDoc(doc(db, 'config', 'store'), {
+      ownerCommissionEarned: Math.max(0, Number(ownerCommissionEarned) || 0),
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, 'config/store');
+  }
+}
+
+export interface FullSyncResult {
+  items: StoreItem[];
+  storeConfig: (StoreConfig & { dueDays?: [number, number] }) | null;
+  pautanganSettings: PautanganSettings | null;
+  sellerConfig: SellerConfig | null;
+  currentUser: UserAccount | null;
+  users: UserAccount[];
+  orders: StoreOrder[];
+  proofs: PaymentProof[];
+  suggestions: SuggestionItem[];
+  listings: MarketplaceListing[];
+  ewalletPosts: EWalletPost[];
+  loans: LoanRecord[];
+  stockAdjustments: StockAdjustmentLog[];
+  internalApps: InternalApp[];
+  syncedAt: string;
+}
+
+export async function syncAllFirestoreDataNow(params: {
+  uid: string;
+  role: UserRole;
+  pautanganEnabled: boolean;
+}): Promise<FullSyncResult> {
+  const { uid, role, pautanganEnabled } = params;
+  const isAdmin = role === UserRole.Admin || role === UserRole.SuperAdmin;
+  const isDelivery = role === UserRole.DeliveryStaff || isAdmin;
+
+  const fetchCollection = async <T,>(
+    q: ReturnType<typeof collection> | ReturnType<typeof query>,
+    path: string
+  ): Promise<T[]> => {
+    try {
+      const snap = await getDocsFromServer(q);
+      return snap.docs.map((d) => d.data() as T);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.LIST, path);
+    }
+  };
+
+  const fetchDoc = async <T,>(
+    ref: ReturnType<typeof doc>,
+    path: string
+  ): Promise<T | null> => {
+    try {
+      const snap = await getDocFromServer(ref);
+      return snap.exists() ? (snap.data() as T) : null;
+    } catch (err) {
+      handleFirestoreError(err, OperationType.GET, path);
+    }
+  };
+
+  const [
+    items,
+    storeConfig,
+    sellerConfig,
+    currentUser,
+    users,
+    boughtOrAllOrders,
+    sellerOrders,
+    submittedOrAllProofs,
+    receivedSellerProofs,
+    suggestions,
+    approvedOrAllListings,
+    myListings,
+    ewalletPosts,
+    pautanganSettings,
+    loans,
+    stockAdjustments,
+    internalApps,
+  ] = await Promise.all([
+    fetchCollection<StoreItem>(collection(db, 'storeItems'), 'storeItems'),
+    fetchDoc<StoreConfig & { dueDays?: [number, number] }>(
+      doc(db, 'config', 'store'),
+      'config/store'
+    ),
+    fetchDoc<SellerConfig>(doc(db, 'sellerConfigs', uid), `sellerConfigs/${uid}`),
+    fetchDoc<UserAccount>(doc(db, 'users', uid), `users/${uid}`),
+    isAdmin
+      ? fetchCollection<UserAccount>(collection(db, 'users'), 'users')
+      : Promise.resolve([] as UserAccount[]),
+    fetchCollection<StoreOrder>(
+      isDelivery
+        ? collection(db, 'orders')
+        : query(collection(db, 'orders'), where('userId', '==', uid)),
+      'orders'
+    ),
+    isDelivery
+      ? Promise.resolve([] as StoreOrder[])
+      : fetchCollection<StoreOrder>(
+          query(collection(db, 'orders'), where('sellerId', '==', uid)),
+          'orders'
+        ),
+    fetchCollection<PaymentProof>(
+      isAdmin
+        ? collection(db, 'paymentProofs')
+        : query(collection(db, 'paymentProofs'), where('userId', '==', uid)),
+      'paymentProofs'
+    ),
+    isAdmin
+      ? Promise.resolve([] as PaymentProof[])
+      : fetchCollection<PaymentProof>(
+          query(collection(db, 'paymentProofs'), where('sellerId', '==', uid)),
+          'paymentProofs'
+        ),
+    fetchCollection<SuggestionItem>(collection(db, 'suggestions'), 'suggestions'),
+    isAdmin
+      ? fetchCollection<MarketplaceListing>(
+          collection(db, 'marketplaceListings'),
+          'marketplaceListings'
+        )
+      : fetchCollection<MarketplaceListing>(
+          query(collection(db, 'marketplaceListings'), where('approvalStatus', '==', 'approved')),
+          'marketplaceListings'
+        ),
+    isAdmin
+      ? Promise.resolve([] as MarketplaceListing[])
+      : fetchCollection<MarketplaceListing>(
+          query(collection(db, 'marketplaceListings'), where('sellerId', '==', uid)),
+          'marketplaceListings'
+        ),
+    fetchCollection<EWalletPost>(collection(db, 'ewalletPosts'), 'ewalletPosts'),
+    isAdmin || pautanganEnabled
+      ? fetchDoc<PautanganSettings>(doc(db, 'config', 'pautangan'), 'config/pautangan')
+      : Promise.resolve(null),
+    isAdmin || pautanganEnabled
+      ? fetchCollection<LoanRecord>(
+          isAdmin
+            ? collection(db, 'loans')
+            : query(collection(db, 'loans'), where('userId', '==', uid)),
+          'loans'
+        )
+      : Promise.resolve([] as LoanRecord[]),
+    isAdmin
+      ? fetchCollection<StockAdjustmentLog>(
+          collection(db, 'stockAdjustments'),
+          'stockAdjustments'
+        )
+      : Promise.resolve([] as StockAdjustmentLog[]),
+    fetchCollection<InternalApp>(collection(db, 'internalApps'), 'internalApps'),
+  ]);
+
+  const mergedOrdersMap = new Map<string, StoreOrder>();
+  for (const o of boughtOrAllOrders) mergedOrdersMap.set(o.id, o);
+  for (const o of sellerOrders) mergedOrdersMap.set(o.id, o);
+  const orders = Array.from(mergedOrdersMap.values()).sort((a, b) =>
+    (b.orderDateIso || '').localeCompare(a.orderDateIso || '')
+  );
+
+  const mergedProofsMap = new Map<string, PaymentProof>();
+  for (const p of submittedOrAllProofs) mergedProofsMap.set(p.id, p);
+  for (const p of receivedSellerProofs) mergedProofsMap.set(p.id, p);
+  const proofs = Array.from(mergedProofsMap.values());
+
+  const mergedListingsMap = new Map<string, MarketplaceListing>();
+  for (const l of approvedOrAllListings) mergedListingsMap.set(l.id, l);
+  for (const l of myListings) mergedListingsMap.set(l.id, l);
+  const listings = Array.from(mergedListingsMap.values());
+
+  return {
+    items,
+    storeConfig,
+    pautanganSettings,
+    sellerConfig,
+    currentUser,
+    users,
+    orders,
+    proofs,
+    suggestions,
+    listings,
+    ewalletPosts,
+    loans,
+    stockAdjustments: [...stockAdjustments].sort(
+      (a, b) => (b.createdAtMs ?? 0) - (a.createdAtMs ?? 0)
+    ),
+    internalApps,
+    syncedAt: new Date().toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    }),
+  };
+}
+

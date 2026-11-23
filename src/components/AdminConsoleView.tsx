@@ -9,6 +9,7 @@ import {
   FileText,
   History,
   Plus,
+  RefreshCw,
   ScanBarcode,
   Settings,
   ShieldAlert,
@@ -20,7 +21,7 @@ import {
   Wallet,
   X,
 } from 'lucide-react';
-import { ITEM_IMAGE_PRESETS } from '../data/seedData';
+import { ITEM_IMAGE_PRESETS, OWNER_BASE_COMMISSION_EARNED } from '../data/seedData';
 import {
   CommissionType,
   FulfillmentType,
@@ -38,7 +39,11 @@ import {
   UserRole,
 } from '../types';
 import { exportExcelWorkbook, exportPdfReport } from '../utils/exportReports';
-import { computeCommission, formatPHP } from '../utils/format';
+import {
+  computeCommission,
+  formatPHP,
+  isOrderPendingAdminConfirmation,
+} from '../utils/format';
 import { compressImageFileToDataUrl } from '../utils/image';
 import { AdminRestockPanel } from './AdminRestockPanel';
 import { AdminSalesOrderPanel } from './AdminSalesOrderPanel';
@@ -117,6 +122,28 @@ interface AdminConsoleViewProps {
     reason: string;
     note?: string;
   }) => Promise<StockAdjustmentLog>;
+  onApprovePendingOrder: (orderId: string) => Promise<void>;
+  onRejectPendingOrder: (orderId: string) => Promise<void>;
+  onSyncAllData: () => Promise<{
+    syncedAt: string;
+    orderCount: number;
+    itemCount: number;
+    ownerCommission: number;
+  }>;
+  requestedSubTab?: {
+    tab:
+      | 'items'
+      | 'restock'
+      | 'stockAdjustments'
+      | 'salesOrder'
+      | 'config'
+      | 'pautangan'
+      | 'superadmin'
+      | 'proofs'
+      | 'marketplace'
+      | 'reports';
+    nonce: number;
+  } | null;
   onExitPreview?: () => void;
 }
 
@@ -154,6 +181,10 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
   onCreateManualSale,
   stockAdjustments,
   onAdjustStock,
+  onApprovePendingOrder,
+  onRejectPendingOrder,
+  onSyncAllData,
+  requestedSubTab,
   onExitPreview,
 }) => {
   const [subTab, setSubTab] = useState<
@@ -167,7 +198,15 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
     | 'proofs'
     | 'marketplace'
     | 'reports'
-  >('items');
+  >(requestedSubTab?.tab ?? 'items');
+  const [isSyncingAll, setIsSyncingAll] = useState(false);
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (requestedSubTab?.tab) {
+      setSubTab(requestedSubTab.tab);
+    }
+  }, [requestedSubTab]);
 
   // Store Config & Due Days State
   const [day1Input, setDay1Input] = useState(String(pautanganSettings.dueDays[0]));
@@ -247,6 +286,12 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
 
   const pendingProofs = proofs.filter((p) => p.status === 'pending');
   const pendingListings = listings.filter((l) => l.approvalStatus === 'pending');
+  const pendingOrdersCount = orders.filter(isOrderPendingAdminConfirmation).length;
+  const marketplaceOrders = orders.filter((o) => (o.commissionEarned ?? 0) > 0);
+  const marketplaceCommissionSum = marketplaceOrders.reduce(
+    (sum, o) => sum + (o.commissionEarned ?? 0),
+    0
+  );
   const totalStoreDebt = users.reduce((s, u) => s + u.debtBalance, 0);
   const totalLoanDebt = loans
     .filter((l) => l.status === 'Active')
@@ -574,6 +619,23 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
     storeConfig.paymentMethods.find((m) => m.id === previewPmId) ??
     storeConfig.paymentMethods.find((m) => m.type === 'digital');
 
+  const handleSyncAllClick = async () => {
+    setIsSyncingAll(true);
+    try {
+      const res = await onSyncAllData();
+      setLastSyncedAt(res.syncedAt);
+      showToast(
+        `Synced all live Firestore data at ${res.syncedAt} (${res.orderCount} orders, ${res.itemCount} items, Owner Share: ${formatPHP(res.ownerCommission, true)}).`
+      );
+    } catch (err) {
+      showErrorToast(
+        err instanceof Error ? err.message : 'Failed to sync Firestore data. Please check permissions.'
+      );
+    } finally {
+      setIsSyncingAll(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
@@ -582,8 +644,24 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
             Admin &amp; Super Admin Configuration
           </h1>
           <p className="mt-1 text-sm text-stone-600 dark:text-stone-400">
-            Manage store items, item images &amp; cost history, categories, payment methods, cash assistance settings, roles, delivery staff, and exportable reports.
+            Manage store items, sales order approvals &amp; stock release, categories, payment methods, cash assistance, roles, delivery staff, and exportable reports.
           </p>
+        </div>
+        <div className="flex flex-col items-start sm:items-end gap-1 shrink-0">
+          <button
+            type="button"
+            disabled={isSyncingAll}
+            onClick={() => void handleSyncAllClick()}
+            className="min-h-[42px] inline-flex items-center justify-center gap-2 rounded-xl border border-teal-700 bg-teal-700 px-4 py-2 text-xs font-semibold text-white hover:bg-teal-800 disabled:opacity-50 whitespace-nowrap cursor-pointer"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isSyncingAll ? 'animate-spin' : ''}`} />
+            <span>{isSyncingAll ? 'Syncing Firestore...' : 'Sync & Update All Data'}</span>
+          </button>
+          {lastSyncedAt && (
+            <span className="text-[11px] text-stone-500 dark:text-stone-400 tabular-nums">
+              Last server sync: {lastSyncedAt}
+            </span>
+          )}
         </div>
       </div>
 
@@ -617,17 +695,17 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
           <div className="mt-1 text-xl font-bold text-teal-700 dark:text-teal-400 font-mono tabular-nums">
             {formatPHP(ownerTotalCommission, true)}
           </div>
-          <div className="mt-0.5 text-xs text-stone-500 dark:text-stone-400">
-            Marketplace commissions
+          <div className="mt-0.5 text-[11px] text-stone-500 dark:text-stone-400 tabular-nums">
+            Base {formatPHP(OWNER_BASE_COMMISSION_EARNED)} + {formatPHP(marketplaceCommissionSum)} ({marketplaceOrders.length} marketplace orders)
           </div>
         </div>
         <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] p-5">
-          <div className="text-xs text-stone-500 dark:text-stone-400">Pending Payment Proofs</div>
+          <div className="text-xs text-stone-500 dark:text-stone-400">Pending Approvals</div>
           <div className="mt-1 text-xl font-bold text-amber-700 dark:text-amber-400 font-mono tabular-nums">
-            {pendingProofs.length}
+            {pendingOrdersCount} Orders · {pendingProofs.length} Proofs
           </div>
           <div className="mt-0.5 text-xs text-stone-500 dark:text-stone-400">
-            Manual check required
+            Sales Order &amp; Proof verification
           </div>
         </div>
         <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] p-5">
@@ -647,7 +725,13 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
           { id: 'items', label: 'Items & Categories' },
           { id: 'restock', label: 'Restock & Barcode' },
           { id: 'stockAdjustments', label: 'Stock Adjustment' },
-          { id: 'salesOrder', label: 'Sales Order (Walk-In)' },
+          {
+            id: 'salesOrder',
+            label:
+              pendingOrdersCount > 0
+                ? `Sales Order (${pendingOrdersCount} Pending)`
+                : 'Sales Order (Walk-In)',
+          },
           { id: 'config', label: 'Store & Payments' },
           { id: 'pautangan', label: 'Cash Assistance' },
           { id: 'superadmin', label: 'Super Admin: Roles & Delivery' },
@@ -1124,13 +1208,16 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
         />
       )}
 
-      {/* Tab: Sales Order (Walk-In & Counter POS) */}
+      {/* Tab: Sales Order (Pending Confirmation & Walk-In Counter POS) */}
       {subTab === 'salesOrder' && (
         <AdminSalesOrderPanel
           items={items}
           users={users}
           orders={orders}
+          proofs={proofs}
           storeConfig={storeConfig}
+          onApproveOrder={onApprovePendingOrder}
+          onRejectOrder={onRejectPendingOrder}
           onCreateManualSale={onCreateManualSale}
           onNotifySuccess={showToast}
           onNotifyError={showErrorToast}
@@ -1901,7 +1988,7 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                 Digital Payment Proof Verification Queue
               </h2>
               <p className="text-xs text-stone-500 dark:text-stone-400">
-                Inspect wallet screenshots before updating customer balances.
+                Inspect Storefront &amp; Pautangan wallet screenshots before updating customer store balances (Community Seller receipts are verified by each seller).
               </p>
             </div>
 

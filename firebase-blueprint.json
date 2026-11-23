@@ -125,8 +125,8 @@
         "fulfillment": { "type": "string", "enum": ["Pickup", "Delivery"] },
         "deliveryNote": { "type": "string", "maxLength": 300 },
         "paymentMethod": { "type": "string", "maxLength": 80 },
-        "status": { "type": "string", "enum": ["Confirmed", "Pending Payment Proof", "Completed"] },
-        "deliveryStatus": { "type": "string", "enum": ["Pending Dispatch", "Out for Delivery", "Delivered"] },
+        "status": { "type": "string", "enum": ["Confirmed", "Pending Payment Proof", "Completed", "Pending Admin Review", "Pending Seller Confirmation", "Rejected"] },
+        "deliveryStatus": { "type": "string", "enum": ["Pending Dispatch", "Out for Delivery", "Delivered", "Pending Admin Approval", "Pending Seller Approval", "Cancelled"] },
         "assignedRunnerId": { "type": "string", "maxLength": 128 },
         "assignedRunner": { "type": "string", "maxLength": 120 },
         "cashCollected": { "type": "boolean" },
@@ -136,6 +136,11 @@
         "dueDateLabel": { "type": "string", "maxLength": 80 },
         "source": { "type": "string", "enum": ["store", "marketplace"] },
         "commissionEarned": { "type": "number" },
+        "sellerId": { "type": "string", "maxLength": 128 },
+        "sellerName": { "type": "string", "maxLength": 120 },
+        "debtSettled": { "type": "boolean" },
+        "debtPaidAmount": { "type": "number" },
+        "settledAt": { "type": "string", "maxLength": 80 },
         "logs": { "type": "array" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -152,7 +157,7 @@
         "amount": { "type": "number" },
         "channel": { "type": "string", "maxLength": 60 },
         "referenceNo": { "type": "string", "maxLength": 100 },
-        "purpose": { "type": "string", "enum": ["Store Debt Settlement", "Order Payment", "Pautangan Repayment"] },
+        "purpose": { "type": "string", "enum": ["Store Debt Settlement", "Order Payment", "Pautangan Repayment", "Community Seller Settlement"] },
         "imageDataUrl": { "type": "string", "maxLength": 400000 },
         "submittedAt": { "type": "string", "maxLength": 80 },
         "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
@@ -160,6 +165,9 @@
         "reviewedAt": { "type": "string", "maxLength": 80 },
         "orderId": { "type": "string", "maxLength": 128 },
         "loanId": { "type": "string", "maxLength": 128 },
+        "sellerId": { "type": "string", "maxLength": 128 },
+        "sellerName": { "type": "string", "maxLength": 120 },
+        "orderIds": { "type": "array" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "userId", "userName", "amount", "channel", "referenceNo", "purpose", "imageDataUrl", "submittedAt", "status"]
@@ -224,9 +232,32 @@
         "approvalStatus": { "type": "string", "enum": ["pending", "approved", "rejected"] },
         "createdAt": { "type": "string", "maxLength": 60 },
         "image": { "type": "string", "maxLength": 400000 },
+        "paused": { "type": "boolean" },
+        "allowCash": { "type": "boolean" },
+        "allowDebt": { "type": "boolean" },
+        "pickupNote": { "type": "string", "maxLength": 200 },
+        "paymentDetails": { "type": "string", "maxLength": 200 },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "sellerId", "sellerName", "sellerDepartment", "title", "description", "price", "stock", "soldCount", "commissionType", "commissionValue", "approvalStatus", "createdAt"]
+    },
+    "SellerConfig": {
+      "title": "SellerConfig",
+      "description": "Community seller configuration for payout channels, reminder template, pickup note, and payment toggles.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "gcashNumber": { "type": "string", "maxLength": 60 },
+        "mayaNumber": { "type": "string", "maxLength": 60 },
+        "paymentNotes": { "type": "string", "maxLength": 300 },
+        "defaultPickupNote": { "type": "string", "maxLength": 200 },
+        "defaultReminderTemplate": { "type": "string", "maxLength": 300 },
+        "defaultAllowCash": { "type": "boolean" },
+        "defaultAllowDebt": { "type": "boolean" },
+        "notifyOnNewSale": { "type": "boolean" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "defaultReminderTemplate", "defaultAllowCash", "defaultAllowDebt"]
     },
     "EWalletPost": {
       "title": "EWalletPost",
@@ -361,6 +392,10 @@
     "/marketplaceListings/{listingId}": {
       "schema": { "$ref": "#/entities/MarketplaceListing" },
       "description": "Coworker for-sale food/product listings."
+    },
+    "/sellerConfigs/{userId}": {
+      "schema": { "$ref": "#/entities/SellerConfig" },
+      "description": "Per-seller payout, reminder template, and marketplace preferences."
     },
     "/ewalletPosts/{postId}": {
       "schema": { "$ref": "#/entities/EWalletPost" },

@@ -1,4 +1,10 @@
-import { CommissionType, LoanInstallment } from '../types';
+import {
+  CommissionType,
+  FulfillmentType,
+  LoanInstallment,
+  PaymentMethod,
+  StoreOrder,
+} from '../types';
 
 export function formatPHP(amount: number, showDecimals = false): string {
   const value = Number.isFinite(amount) ? amount : 0;
@@ -8,6 +14,68 @@ export function formatPHP(amount: number, showDecimals = false): string {
     minimumFractionDigits: showDecimals ? 2 : 0,
     maximumFractionDigits: showDecimals ? 2 : 0,
   }).format(value);
+}
+
+export function isOrderPendingAdminConfirmation(order: StoreOrder): boolean {
+  return (
+    order.status === 'Pending Admin Review' ||
+    order.status === 'Pending Payment Proof' ||
+    order.deliveryStatus === 'Pending Admin Approval'
+  );
+}
+
+export function isOrderPendingSellerConfirmation(order: StoreOrder): boolean {
+  return (
+    order.source === 'marketplace' &&
+    (order.status === 'Pending Seller Confirmation' ||
+      order.deliveryStatus === 'Pending Seller Approval')
+  );
+}
+
+export function isApprovedDeliveryOrder(order: StoreOrder): boolean {
+  if (order.fulfillment !== FulfillmentType.Delivery) return false;
+  if (
+    order.status === 'Pending Admin Review' ||
+    order.status === 'Pending Payment Proof' ||
+    order.status === 'Pending Seller Confirmation' ||
+    order.status === 'Rejected'
+  ) {
+    return false;
+  }
+  if (
+    order.deliveryStatus === 'Pending Admin Approval' ||
+    order.deliveryStatus === 'Pending Seller Approval' ||
+    order.deliveryStatus === 'Cancelled'
+  ) {
+    return false;
+  }
+  return true;
+}
+
+export function getOrderItemsSubtotal(order: StoreOrder): number {
+  return order.items.reduce((sum, li) => sum + li.unitPrice * li.quantity, 0);
+}
+
+export function getOrderRemainingDebt(order: StoreOrder): number {
+  if (order.paymentMethod !== PaymentMethod.Debt || order.debtSettled) {
+    return 0;
+  }
+  const subtotal = getOrderItemsSubtotal(order);
+  const paid = Math.max(0, Number(order.debtPaidAmount ?? 0));
+  return Math.max(0, subtotal - paid);
+}
+
+export function summarizeOrderItems(orders: StoreOrder[]): string {
+  const counts = new Map<string, number>();
+  for (const ord of orders) {
+    for (const li of ord.items) {
+      const cleanName = li.name.replace(' (Coworker Sale)', '').trim();
+      counts.set(cleanName, (counts.get(cleanName) ?? 0) + li.quantity);
+    }
+  }
+  return Array.from(counts.entries())
+    .map(([name, qty]) => `${qty}× ${name}`)
+    .join(', ');
 }
 
 export function computeCommission(

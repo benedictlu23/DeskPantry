@@ -2,8 +2,10 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import {
   ArrowLeftRight,
+  BarChart3,
   Bell,
   ChevronDown,
+  ClipboardList,
   Eye,
   Grid,
   HandCoins,
@@ -33,20 +35,21 @@ import { OtherAppsView } from './components/OtherAppsView';
 import { PautanganView } from './components/PautanganView';
 import { PWAInstallButton } from './components/PWAInstallButton';
 import { QRShareModal } from './components/QRShareModal';
+import { SellerDashboardView } from './components/SellerDashboardView';
 import { SignInModal } from './components/SignInModal';
 import { StorefrontView } from './components/StorefrontView';
 import {
-  INITIAL_CHAT_THREADS,
-  INITIAL_OTHER_APPS,
   INITIAL_PAUTANGAN_SETTINGS,
   INITIAL_STORE_CONFIG,
-  INITIAL_STORE_ITEMS,
   OWNER_BASE_COMMISSION_EARNED,
 } from './data/seedData';
 import { auth } from './firebase';
 import {
   addChatMessageToThread,
+  approveSellerProofAndSettleOrders,
   createNotificationDoc,
+  getSellerConfigById,
+  markMarketplaceOrderDebtSettled,
   markNotificationReadDoc,
   markThreadUnreadCount,
   recordStockAdjustment,
@@ -58,6 +61,7 @@ import {
   saveOrder,
   savePautanganSettings,
   savePaymentProof,
+  saveSellerConfig,
   saveStoreConfig,
   saveStoreItem,
   saveSuggestion,
@@ -65,10 +69,14 @@ import {
   seedInitialFirestoreDataIfEmpty,
   subscribeAuthenticatedData,
   subscribePublicStoreData,
+  syncAllFirestoreDataNow,
+  syncOwnerCommissionToStoreConfig,
   toggleInternalAppInstalled,
   updateEWalletPostPartial,
   updateMarketplaceListingStock,
+  updateMarketplaceOrderConfirmation,
   updateOrderDeliveryFields,
+  updateSellerListingConfig,
   updateStoreItemStock,
   updateSuggestionVotes,
   updateUserCheckoutTotals,
@@ -88,6 +96,7 @@ import {
   PautanganSettings,
   PaymentMethod,
   PaymentProof,
+  SellerConfig,
   StockAdjustmentLog,
   StoreConfig,
   StoreItem,
@@ -101,6 +110,11 @@ import {
   computeCommission,
   formatPHP,
   getNextDueDateLabel,
+  getOrderItemsSubtotal,
+  getOrderRemainingDebt,
+  isApprovedDeliveryOrder,
+  isOrderPendingAdminConfirmation,
+  isOrderPendingSellerConfirmation,
 } from './utils/format';
 
 const DARK_MODE_STORAGE_KEY = 'deskpantry_dark_mode';
@@ -123,7 +137,8 @@ export default function App() {
   const [avatarFailed, setAvatarFailed] = useState(false);
 
   const [users, setUsers] = useState<UserAccount[]>([]);
-  const [items, setItems] = useState<StoreItem[]>(INITIAL_STORE_ITEMS);
+  const [items, setItems] = useState<StoreItem[]>([]);
+  const [isStoreLoading, setIsStoreLoading] = useState<boolean>(true);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [orders, setOrders] = useState<StoreOrder[]>([]);
   const [proofs, setProofs] = useState<PaymentProof[]>([]);
@@ -136,16 +151,32 @@ export default function App() {
   const [storeConfig, setStoreConfig] = useState<StoreConfig>(INITIAL_STORE_CONFIG);
   const [loans, setLoans] = useState<LoanRecord[]>([]);
   const [stockAdjustments, setStockAdjustments] = useState<StockAdjustmentLog[]>([]);
-  const [threads, setThreads] = useState<ChatThread[]>(INITIAL_CHAT_THREADS);
+  const [threads, setThreads] = useState<ChatThread[]>([]);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [localReadNotifIds, setLocalReadNotifIds] = useState<Record<string, boolean>>({});
-  const [otherApps, setOtherApps] = useState<InternalApp[]>(INITIAL_OTHER_APPS);
+  const [otherApps, setOtherApps] = useState<InternalApp[]>([]);
+  const [sellerConfig, setSellerConfig] = useState<SellerConfig | null>(null);
+  const [openCommunitySellSignal, setOpenCommunitySellSignal] = useState(0);
   const [unreadCommunityCount, setUnreadCommunityCount] = useState(0);
   const [lastFeedEvent, setLastFeedEvent] = useState(
     'Live coworker suggestions & approved for-sale drops sync automatically once signed in.'
   );
 
   const [activeSection, setActiveSection] = useState<ActiveSection>('store');
+  const [requestedAdminSubTab, setRequestedAdminSubTab] = useState<{
+    tab:
+      | 'items'
+      | 'restock'
+      | 'stockAdjustments'
+      | 'salesOrder'
+      | 'config'
+      | 'pautangan'
+      | 'superadmin'
+      | 'proofs'
+      | 'marketplace'
+      | 'reports';
+    nonce: number;
+  } | null>(null);
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [isSignInOpen, setIsSignInOpen] = useState(false);
   const [isQROpen, setIsQROpen] = useState(false);
@@ -191,6 +222,7 @@ export default function App() {
     const unsubPublic = subscribePublicStoreData({
       onItems: (nextItems) => {
         setItems(nextItems);
+        setIsStoreLoading(false);
       },
       onStoreConfig: (nextCfg) => {
         const { dueDays: syncedDueDays, ...rest } = nextCfg;
@@ -227,6 +259,7 @@ export default function App() {
         setStockAdjustments([]);
         setThreads([]);
         setNotifications([]);
+        setSellerConfig(null);
         setLocalReadNotifIds({});
         return;
       }
@@ -314,6 +347,9 @@ export default function App() {
         onStockAdjustments: (nextLogs) => {
           setStockAdjustments(nextLogs);
         },
+        onSellerConfig: (nextSellerCfg) => {
+          setSellerConfig(nextSellerCfg);
+        },
       }
     );
 
@@ -398,19 +434,60 @@ export default function App() {
       return 'all';
     };
 
+    const orderProofRefs = new Set(
+      proofs
+        .filter((p) => p.purpose === 'Order Payment')
+        .map((p) => p.referenceNo.toLowerCase())
+    );
+
+    const isAllowedCustomerNotification = (n: NotificationItem): boolean => {
+      const titleLower = n.title.toLowerCase();
+      const bodyLower = n.body.toLowerCase();
+
+      // 1. Payments reminder
+      if (n.type === 'reminder') return true;
+
+      // 2. Comments on their Buy/Sell E-Wallet post
+      if (n.type === 'ewallet') {
+        return titleLower.includes('comment') || bodyLower.includes('commented');
+      }
+
+      // 3. Payment on their debt (exclude order confirmations, declines, and order payment proofs)
+      if (n.type === 'payment') {
+        if (
+          titleLower.includes('order confirmed') ||
+          titleLower.includes('order declined') ||
+          titleLower.includes('awaiting confirmation') ||
+          bodyLower.includes('order payment')
+        ) {
+          return false;
+        }
+        for (const ref of orderProofRefs) {
+          if (ref && (titleLower.includes(ref) || bodyLower.includes(ref))) {
+            return false;
+          }
+        }
+        return true;
+      }
+
+      return false;
+    };
+
     return notifications
       .filter((n) => {
         const target = resolveEffectiveTarget(n);
-        if (target === currentUser.id) return true;
-        if (target === 'all') return true;
         if (target === 'delivery') return canViewDeliveryNav;
         if (target === 'admins') return isAdminOrSuper;
         if (target === 'super_admin') return currentRole === UserRole.SuperAdmin;
+        if (target === currentUser.id || target === 'all') {
+          return isAllowedCustomerNotification(n);
+        }
         return false;
       })
       .map((n) => (localReadNotifIds[n.id] ? { ...n, read: true } : n));
   }, [
     notifications,
+    proofs,
     localReadNotifIds,
     currentUser,
     currentRole,
@@ -422,13 +499,69 @@ export default function App() {
   const unreadChatCount = currentUser
     ? threads.reduce((sum, t) => sum + t.unreadCount, 0)
     : 0;
-  const pendingProofsCount = proofs.filter((p) => p.status === 'pending').length;
+  const storeProofs = useMemo(
+    () => proofs.filter((p) => p.purpose !== 'Community Seller Settlement'),
+    [proofs]
+  );
+  const pendingProofsCount = storeProofs.filter((p) => p.status === 'pending').length;
+  const pendingOrdersCount = orders.filter(isOrderPendingAdminConfirmation).length;
   const pendingDeliveriesCount = orders.filter(
-    (o) => (o.deliveryStatus ?? 'Pending Dispatch') !== 'Delivered'
+    (o) =>
+      isApprovedDeliveryOrder(o) &&
+      (o.deliveryStatus ?? 'Pending Dispatch') !== 'Delivered'
   ).length;
   const openEWalletCount = currentUser
     ? ewalletPosts.filter((p) => p.status !== 'Completed').length
     : 0;
+
+  const sellerDebtSummary = useMemo(() => {
+    if (!currentUser) {
+      return {
+        unpaidCount: 0,
+        collectablesTotal: 0,
+        pendingOrdersCount: 0,
+        pendingProofsCount: 0,
+      };
+    }
+    const myListingIds = new Set(
+      listings.filter((l) => l.sellerId === currentUser.id).map((l) => l.id)
+    );
+    let unpaidCount = 0;
+    let collectablesTotal = 0;
+    let pendingSellerOrders = 0;
+    for (const o of orders) {
+      if (o.source !== 'marketplace') continue;
+      if (o.status === 'Rejected' || o.deliveryStatus === 'Cancelled') continue;
+      const isMine =
+        o.sellerId === currentUser.id || o.items.some((li) => myListingIds.has(li.itemId));
+      if (!isMine) continue;
+      if (isOrderPendingSellerConfirmation(o)) {
+        pendingSellerOrders += 1;
+        continue;
+      }
+      if (o.status !== 'Confirmed' && o.status !== 'Completed') continue;
+      if (o.paymentMethod === PaymentMethod.Debt && !o.debtSettled) {
+        const rem = getOrderRemainingDebt(o);
+        if (rem > 0.009) {
+          unpaidCount += 1;
+          collectablesTotal += rem;
+        }
+      }
+    }
+    const pendingSellerProofs = proofs.filter(
+      (p) =>
+        p.purpose === 'Community Seller Settlement' &&
+        p.status === 'pending' &&
+        p.sellerId === currentUser.id
+    ).length;
+    return {
+      unpaidCount,
+      collectablesTotal,
+      pendingOrdersCount: pendingSellerOrders,
+      pendingProofsCount: pendingSellerProofs,
+    };
+  }, [currentUser, listings, orders, proofs]);
+
   const cartCount = cart.reduce((sum, c) => sum + c.quantity, 0);
 
   const handleSignOut = async () => {
@@ -505,16 +638,19 @@ export default function App() {
 
     const isDigital = Boolean(payload.proofChannel && payload.proofImage);
     const isDebt = payload.paymentMethod === PaymentMethod.Debt;
-    const orderId = `ORD-${Date.now().toString().slice(-6)}`;
+    const orderId = `ORD-${Date.now().toString(36).toUpperCase()}-${Math.random()
+      .toString(36)
+      .slice(2, 5)
+      .toUpperCase()}`;
     const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const todayIso = new Date().toISOString().slice(0, 10);
     const nowLabel = `${todayIso} ${nowTime}`;
 
+    const isPickup = payload.fulfillment === FulfillmentType.Pickup;
     const defaultRunner = users.find((u) => u.role === UserRole.DeliveryStaff);
-    const runnerName =
-      payload.fulfillment === FulfillmentType.Delivery
-        ? defaultRunner?.name ?? 'Kuya Jun Reyes'
-        : 'Counter B Pickup';
+    const runnerName = isPickup
+      ? 'Counter B Pickup'
+      : defaultRunner?.name ?? 'Kuya Jun Reyes';
 
     const newOrder: StoreOrder = {
       id: orderId,
@@ -527,9 +663,9 @@ export default function App() {
       fulfillment: payload.fulfillment,
       deliveryNote: payload.deliveryNote || undefined,
       paymentMethod: payload.paymentMethod,
-      status: isDigital ? 'Pending Payment Proof' : 'Confirmed',
-      deliveryStatus: 'Pending Dispatch',
-      assignedRunnerId: defaultRunner?.id,
+      status: 'Pending Admin Review',
+      deliveryStatus: 'Pending Admin Approval',
+      assignedRunnerId: isPickup ? undefined : defaultRunner?.id,
       assignedRunner: runnerName,
       cashCollected: false,
       createdAt: nowLabel,
@@ -540,7 +676,7 @@ export default function App() {
         {
           id: `lg-${Date.now()}-1`,
           timestamp: nowLabel,
-          event: `Order placed via ${payload.paymentMethod} (${payload.fulfillment})`,
+          event: `Order placed via ${payload.paymentMethod} (${payload.fulfillment}) — Waiting on Sales Order for Admin confirmation & stock release`,
           actor: currentUser.name,
         },
         ...(deliveryFee > 0
@@ -548,7 +684,7 @@ export default function App() {
               {
                 id: `lg-${Date.now()}-2`,
                 timestamp: nowLabel,
-                event: `Assigned to ${runnerName} (${formatPHP(deliveryFee)} delivery fee commission)`,
+                event: `Assigned runner ${runnerName} (${formatPHP(deliveryFee)} fee — dispatched only after Admin approval)`,
                 actor: 'System',
               },
             ]
@@ -556,45 +692,17 @@ export default function App() {
       ],
     };
 
-    const nextDebt = isDebt ? currentUser.debtBalance + totalAmount : currentUser.debtBalance;
-    const nextSpent = currentUser.totalSpent + totalAmount;
-
+    // Stock, customer debt/spend, and delivery staff dispatch wait for explicit Admin approval on Sales Order.
     setCart([]);
     setOrders((prev) => [newOrder, ...prev]);
-    setItems((prev) =>
-      prev.map((item) => {
-        const bought = orderItems.find((o) => o.itemId === item.id);
-        if (!bought) return item;
-        return {
-          ...item,
-          stock: Math.max(0, item.stock - bought.quantity),
-          soldCount: item.soldCount + bought.quantity,
-        };
-      })
-    );
-    setAuthUser((prev) =>
-      prev && prev.id === currentUser.id
-        ? { ...prev, debtBalance: nextDebt, totalSpent: nextSpent }
-        : prev
-    );
-
     void saveOrder(newOrder);
-    void updateUserCheckoutTotals(currentUser.id, nextDebt, nextSpent);
-
-    for (const bought of orderItems) {
-      const existingItem = items.find((i) => i.id === bought.itemId);
-      if (existingItem) {
-        void updateStoreItemStock(
-          existingItem.id,
-          Math.max(0, existingItem.stock - bought.quantity),
-          existingItem.soldCount + bought.quantity
-        );
-      }
-    }
 
     if (isDigital && payload.proofChannel && payload.proofImage) {
       const newProof: PaymentProof = {
-        id: `PRF-${Date.now().toString().slice(-6)}`,
+        id: `PRF-${Date.now().toString(36).toUpperCase()}-${Math.random()
+          .toString(36)
+          .slice(2, 5)
+          .toUpperCase()}`,
         userId: currentUser.id,
         userName: currentUser.name,
         amount: totalAmount,
@@ -609,30 +717,333 @@ export default function App() {
       setProofs((prev) => [newProof, ...prev]);
       void savePaymentProof(newProof);
 
-      const payNotif: NotificationItem = {
+      void createNotificationDoc({
         id: `notif-pay-${Date.now()}`,
-        title: `Payment Proof Submitted · ${payload.proofChannel}`,
-        body: `${currentUser.name} submitted ${formatPHP(totalAmount, true)} proof for ${orderId}.`,
+        title: `New Store Order Awaiting Confirmation · ${orderId}`,
+        body: `${currentUser.name} submitted ${formatPHP(totalAmount, true)} (${payload.proofChannel}) for ${payload.fulfillment}. Approve on Sales Order to release stock.`,
         timestamp: 'Just now',
         type: 'payment',
         read: false,
         targetUserId: 'admins',
-      };
-      void createNotificationDoc(payNotif);
+      });
+    } else {
+      void createNotificationDoc({
+        id: `notif-ord-${Date.now()}`,
+        title: `New Store Order Awaiting Confirmation · ${orderId}`,
+        body: `${currentUser.name} placed a ${payload.fulfillment} order via ${payload.paymentMethod} (${formatPHP(totalAmount, true)}). Approve on Sales Order to release stock.`,
+        timestamp: 'Just now',
+        type: 'payment',
+        read: false,
+        targetUserId: 'admins',
+      });
+    }
+  };
+
+  const approveOrderInternal = async (
+    orderId: string,
+    options?: { skipProofId?: string }
+  ): Promise<void> => {
+    const targetOrder = orders.find((o) => o.id === orderId);
+    if (!targetOrder) {
+      throw new Error(`Order ${orderId} not found.`);
+    }
+    if (!isOrderPendingAdminConfirmation(targetOrder)) {
+      throw new Error(`Order ${orderId} has already been processed.`);
     }
 
-    if (payload.fulfillment === FulfillmentType.Delivery) {
-      const delNotif: NotificationItem = {
+    const wasPendingAdminReview = targetOrder.status === 'Pending Admin Review';
+    const isPickup = targetOrder.fulfillment === FulfillmentType.Pickup;
+    const isCash = targetOrder.paymentMethod === PaymentMethod.Cash;
+    const isDebt = targetOrder.paymentMethod === PaymentMethod.Debt;
+    const actorName = authUser?.name ?? currentUser?.name ?? 'Admin';
+    const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const nowLabel = `${todayIso} ${nowTime}`;
+
+    if (targetOrder.source !== 'marketplace') {
+      for (const line of targetOrder.items) {
+        const product = items.find((i) => i.id === line.itemId);
+        if (product && product.stock < line.quantity) {
+          throw new Error(
+            `Insufficient stock for ${product.name} (${product.stock} left, need ${line.quantity}).`
+          );
+        }
+      }
+    }
+
+    const defaultRunner = users.find((u) => u.role === UserRole.DeliveryStaff);
+    const runnerName = isPickup
+      ? 'Counter B Pickup'
+      : targetOrder.assignedRunner && targetOrder.assignedRunner !== 'Counter B Pickup'
+        ? targetOrder.assignedRunner
+        : defaultRunner?.name ?? 'Kuya Jun Reyes';
+
+    const updatedOrder: StoreOrder = {
+      ...targetOrder,
+      status: isPickup ? 'Completed' : 'Confirmed',
+      deliveryStatus: isPickup ? 'Delivered' : 'Pending Dispatch',
+      assignedRunnerId: isPickup ? undefined : targetOrder.assignedRunnerId ?? defaultRunner?.id,
+      assignedRunner: runnerName,
+      deliveredAt: isPickup ? nowLabel : targetOrder.deliveredAt,
+      cashCollected: isPickup && isCash ? true : targetOrder.cashCollected,
+      logs: [
+        ...(targetOrder.logs ?? []),
+        {
+          id: `lg-app-${Date.now()}`,
+          timestamp: nowLabel,
+          event: isPickup
+            ? `Approved & stock released by ${actorName} (${targetOrder.fulfillment}) — Completed at Counter B`
+            : `Approved & stock released by ${actorName} — Dispatched to ${runnerName}`,
+          actor: actorName,
+        },
+      ],
+    };
+
+    const previousOrders = orders;
+    const previousItems = items;
+    const previousUsers = users;
+    const previousProofs = proofs;
+
+    const stockUpdates: Array<{ itemId: string; nextStock: number; nextSold: number }> = [];
+    if (targetOrder.source !== 'marketplace') {
+      for (const line of targetOrder.items) {
+        const product = items.find((i) => i.id === line.itemId);
+        if (product) {
+          stockUpdates.push({
+            itemId: product.id,
+            nextStock: Math.max(0, product.stock - line.quantity),
+            nextSold: product.soldCount + line.quantity,
+          });
+        }
+      }
+    }
+
+    setOrders((prev) => prev.map((o) => (o.id === updatedOrder.id ? updatedOrder : o)));
+    if (stockUpdates.length > 0) {
+      setItems((prev) =>
+        prev.map((item) => {
+          const upd = stockUpdates.find((u) => u.itemId === item.id);
+          return upd ? { ...item, stock: upd.nextStock, soldCount: upd.nextSold } : item;
+        })
+      );
+    }
+
+    const targetCustomer =
+      targetOrder.userId && targetOrder.userId !== 'walk-in'
+        ? users.find((u) => u.id === targetOrder.userId) ??
+          (authUser?.id === targetOrder.userId ? authUser : undefined)
+        : undefined;
+    const shouldUpdateCustomerTotals = wasPendingAdminReview && Boolean(targetCustomer);
+    const nextDebt =
+      shouldUpdateCustomerTotals && targetCustomer
+        ? isDebt
+          ? targetCustomer.debtBalance + targetOrder.totalAmount
+          : targetCustomer.debtBalance
+        : 0;
+    const nextSpent =
+      shouldUpdateCustomerTotals && targetCustomer
+        ? targetCustomer.totalSpent + targetOrder.totalAmount
+        : 0;
+
+    if (shouldUpdateCustomerTotals && targetCustomer) {
+      setUsers((prev) =>
+        prev.map((u) =>
+          u.id === targetCustomer.id
+            ? { ...u, debtBalance: nextDebt, totalSpent: nextSpent }
+            : u
+        )
+      );
+      if (authUser?.id === targetCustomer.id) {
+        setAuthUser((prev) =>
+          prev ? { ...prev, debtBalance: nextDebt, totalSpent: nextSpent } : prev
+        );
+      }
+    }
+
+    const linkedPendingProofs = proofs.filter(
+      (p) =>
+        p.orderId === targetOrder.id &&
+        p.status === 'pending' &&
+        p.id !== options?.skipProofId
+    );
+    if (linkedPendingProofs.length > 0) {
+      setProofs((prev) =>
+        prev.map((p) =>
+          linkedPendingProofs.some((lp) => lp.id === p.id)
+            ? { ...p, status: 'approved', reviewedBy: actorName, reviewedAt: 'Just now' }
+            : p
+        )
+      );
+    }
+
+    try {
+      await saveOrder(updatedOrder);
+      if (stockUpdates.length > 0) {
+        await Promise.all(
+          stockUpdates.map((u) => updateStoreItemStock(u.itemId, u.nextStock, u.nextSold))
+        );
+      }
+      if (shouldUpdateCustomerTotals && targetCustomer) {
+        await updateUserCheckoutTotals(targetCustomer.id, nextDebt, nextSpent);
+      }
+      if (linkedPendingProofs.length > 0) {
+        await Promise.all(
+          linkedPendingProofs.map((p) =>
+            savePaymentProof({
+              ...p,
+              status: 'approved',
+              reviewedBy: actorName,
+              reviewedAt: 'Just now',
+            })
+          )
+        );
+      }
+    } catch (err) {
+      setOrders(previousOrders);
+      setItems(previousItems);
+      setUsers(previousUsers);
+      setProofs(previousProofs);
+      throw err;
+    }
+
+    if (!isPickup) {
+      void createNotificationDoc({
         id: `notif-del-${Date.now()}`,
-        title: `New Delivery Order · ${orderId}`,
-        body: `${currentUser.name} requested desk delivery (${payload.deliveryNote || 'Office Floor'}).`,
+        title: `Approved Delivery Order · ${updatedOrder.id}`,
+        body: `${updatedOrder.userName}'s order is approved for desk delivery (${updatedOrder.deliveryNote || 'Office Floor'}).`,
         timestamp: 'Just now',
         type: 'delivery',
         read: false,
         targetUserId: 'delivery',
-      };
-      void createNotificationDoc(delNotif);
+      });
     }
+  };
+
+  const handleApprovePendingOrder = async (orderId: string): Promise<void> => {
+    await approveOrderInternal(orderId);
+  };
+
+  const handleRejectPendingOrder = async (orderId: string): Promise<void> => {
+    const targetOrder = orders.find((o) => o.id === orderId);
+    if (!targetOrder) {
+      throw new Error(`Order ${orderId} not found.`);
+    }
+    if (!isOrderPendingAdminConfirmation(targetOrder)) {
+      throw new Error(`Order ${orderId} has already been processed.`);
+    }
+
+    const actorName = authUser?.name ?? currentUser?.name ?? 'Admin';
+    const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const nowLabel = `${todayIso} ${nowTime}`;
+
+    const rejectedOrder: StoreOrder = {
+      ...targetOrder,
+      status: 'Rejected',
+      deliveryStatus: 'Cancelled',
+      logs: [
+        ...(targetOrder.logs ?? []),
+        {
+          id: `lg-rej-${Date.now()}`,
+          timestamp: nowLabel,
+          event: 'Order rejected on Sales Order (no stock or debt released)',
+          actor: actorName,
+        },
+      ],
+    };
+
+    const linkedPendingProofs = proofs.filter(
+      (p) => p.orderId === targetOrder.id && p.status === 'pending'
+    );
+
+    const previousOrders = orders;
+    const previousProofs = proofs;
+    setOrders((prev) => prev.map((o) => (o.id === orderId ? rejectedOrder : o)));
+    if (linkedPendingProofs.length > 0) {
+      setProofs((prev) =>
+        prev.map((p) =>
+          linkedPendingProofs.some((lp) => lp.id === p.id)
+            ? { ...p, status: 'rejected', reviewedBy: actorName, reviewedAt: 'Just now' }
+            : p
+        )
+      );
+    }
+
+    try {
+      await saveOrder(rejectedOrder);
+      if (linkedPendingProofs.length > 0) {
+        await Promise.all(
+          linkedPendingProofs.map((p) =>
+            savePaymentProof({
+              ...p,
+              status: 'rejected',
+              reviewedBy: actorName,
+              reviewedAt: 'Just now',
+            })
+          )
+        );
+      }
+    } catch (err) {
+      setOrders(previousOrders);
+      setProofs(previousProofs);
+      throw err;
+    }
+  };
+
+  const handleSyncAllData = async (): Promise<{
+    syncedAt: string;
+    orderCount: number;
+    itemCount: number;
+    ownerCommission: number;
+  }> => {
+    if (!authUser) {
+      throw new Error('Sign in with an Admin account to sync Firestore data.');
+    }
+    const res = await syncAllFirestoreDataNow({
+      uid: authUser.id,
+      role: authUser.role,
+      pautanganEnabled: authUser.pautanganEnabled,
+    });
+
+    setItems(res.items);
+    setIsStoreLoading(false);
+    if (res.storeConfig) {
+      const { dueDays: syncedDueDays, ...rest } = res.storeConfig;
+      setStoreConfig(rest);
+      if (Array.isArray(syncedDueDays) && syncedDueDays.length === 2) {
+        dueDaysRef.current = [Number(syncedDueDays[0]), Number(syncedDueDays[1])];
+      }
+    }
+    if (res.pautanganSettings) {
+      dueDaysRef.current = res.pautanganSettings.dueDays;
+      setPautanganSettings(res.pautanganSettings);
+    }
+    if (res.currentUser) setAuthUser(res.currentUser);
+    if (res.users.length > 0) setUsers(res.users);
+    setOrders(res.orders);
+    setProofs(res.proofs);
+    setSuggestions(res.suggestions);
+    setListings(res.listings);
+    setEWalletPosts(res.ewalletPosts);
+    setLoans(res.loans);
+    setStockAdjustments(res.stockAdjustments);
+    setOtherApps(res.internalApps);
+    setSellerConfig(res.sellerConfig);
+
+    const freshOwnerCommission =
+      OWNER_BASE_COMMISSION_EARNED +
+      res.orders.reduce((sum, o) => sum + (o.commissionEarned ?? 0), 0);
+
+    if (isActualAdmin) {
+      await syncOwnerCommissionToStoreConfig(freshOwnerCommission);
+    }
+
+    return {
+      syncedAt: res.syncedAt,
+      orderCount: res.orders.length,
+      itemCount: res.items.length,
+      ownerCommission: freshOwnerCommission,
+    };
   };
 
   const handleUpdateDeliveryStatus = (
@@ -686,32 +1097,6 @@ export default function App() {
     } else {
       void updateOrderDeliveryFields(orderId, patch);
     }
-
-    if (target.userId && target.userId !== 'walk-in') {
-      void createNotificationDoc({
-        id: `notif-ds-${Date.now()}`,
-        title: `Order ${orderId} · ${deliveryStatus}`,
-        body: `${target.userName}'s order is now ${deliveryStatus.toLowerCase()} by ${actorName}.`,
-        timestamp: 'Just now',
-        type: 'delivery',
-        read: false,
-        targetUserId: target.userId,
-      });
-    }
-  };
-
-  const handleNotifyDeliveryCustomer = (order: StoreOrder) => {
-    if (!order.userId || order.userId === 'walk-in') return;
-    const runner = currentUser?.name ?? order.assignedRunner ?? 'Delivery Staff';
-    void createNotificationDoc({
-      id: `notif-ping-${Date.now()}`,
-      title: `Delivery Runner Alert · ${order.id}`,
-      body: `${runner} is heading to ${order.deliveryNote || 'your floor'} with your DeskPantry order.`,
-      timestamp: 'Just now',
-      type: 'delivery',
-      read: false,
-      targetUserId: order.userId,
-    });
   };
 
   const handleToggleVote = (suggestionId: string) => {
@@ -760,15 +1145,6 @@ export default function App() {
     setUnreadCommunityCount((c) => c + 1);
     setLastFeedEvent(`${currentUser.name} requested "${title}" on Suggestions Feed.`);
     void saveSuggestion(newSug);
-    void createNotificationDoc({
-      id: `notif-com-${Date.now()}`,
-      title: 'New Community Suggestion',
-      body: `${currentUser.name} suggested "${title}" (${category}).`,
-      timestamp: 'Just now',
-      type: 'community',
-      read: false,
-      targetUserId: 'all',
-    });
   };
 
   const handleCreateListing = (payload: {
@@ -781,6 +1157,17 @@ export default function App() {
     image?: string;
   }) => {
     if (!currentUser) return;
+    const defaultPaymentParts: string[] = [];
+    if (sellerConfig?.gcashNumber?.trim()) {
+      defaultPaymentParts.push(`GCash ${sellerConfig.gcashNumber.trim()}`);
+    }
+    if (sellerConfig?.mayaNumber?.trim()) {
+      defaultPaymentParts.push(`Maya ${sellerConfig.mayaNumber.trim()}`);
+    }
+    if (sellerConfig?.paymentNotes?.trim()) {
+      defaultPaymentParts.push(sellerConfig.paymentNotes.trim());
+    }
+
     const newListing: MarketplaceListing = {
       id: `mkt-${Date.now()}`,
       sellerId: currentUser.id,
@@ -796,6 +1183,12 @@ export default function App() {
       approvalStatus: 'pending',
       createdAt: 'Pending Review · Just now',
       image: payload.image,
+      paused: false,
+      allowCash: sellerConfig?.defaultAllowCash ?? true,
+      allowDebt: sellerConfig?.defaultAllowDebt ?? true,
+      pickupNote: sellerConfig?.defaultPickupNote?.trim() || undefined,
+      paymentDetails:
+        defaultPaymentParts.length > 0 ? defaultPaymentParts.join(' · ').slice(0, 200) : undefined,
     };
     setListings((prev) => [newListing, ...prev]);
     setUnreadCommunityCount((c) => c + 1);
@@ -815,11 +1208,14 @@ export default function App() {
   const handleBuyListing = (
     listingId: string,
     paymentMethod: PaymentMethod.Cash | PaymentMethod.Debt,
-    fulfillment: FulfillmentType
+    fulfillment: FulfillmentType,
+    quantity = 1
   ) => {
     if (!currentUser) return;
     const target = listings.find((l) => l.id === listingId);
-    if (!target || target.stock <= 0) return;
+    if (!target || target.stock <= 0 || target.paused) return;
+
+    const qty = Math.max(1, Math.min(target.stock, Math.round(quantity || 1)));
 
     const { ownerShare } = computeCommission(
       target.price,
@@ -831,23 +1227,27 @@ export default function App() {
       fulfillment === FulfillmentType.Delivery && storeConfig.deliveryEnabled
         ? storeConfig.deliveryFee
         : 0;
-    const totalAmount = target.price + deliveryFee;
+    const totalAmount = target.price * qty + deliveryFee;
     const todayIso = new Date().toISOString().slice(0, 10);
     const nowLabel = `${todayIso} ${new Date().toLocaleTimeString([], {
       hour: '2-digit',
       minute: '2-digit',
     })}`;
-    const runner = users.find((u) => u.role === UserRole.DeliveryStaff);
 
+    // Seller must confirm first before releasing stock, adding to buyer Community Debt ledger,
+    // or dispatching to Delivery Staff. Also never touches Store debtBalance.
     const newOrder: StoreOrder = {
-      id: `MKT-${Date.now().toString().slice(-6)}`,
+      id: `MKT-${Date.now().toString(36).toUpperCase()}-${Math.random()
+        .toString(36)
+        .slice(2, 5)
+        .toUpperCase()}`,
       userId: currentUser.id,
       userName: currentUser.name,
       items: [
         {
           itemId: target.id,
           name: `${target.title} (Coworker Sale)`,
-          quantity: 1,
+          quantity: qty,
           unitPrice: target.price,
         },
       ],
@@ -856,52 +1256,300 @@ export default function App() {
       deliveryCommission: deliveryFee,
       fulfillment,
       paymentMethod,
-      status: 'Confirmed',
-      deliveryStatus: 'Pending Dispatch',
-      assignedRunnerId: runner?.id,
+      status: 'Pending Seller Confirmation',
+      deliveryStatus: 'Pending Seller Approval',
       assignedRunner:
-        fulfillment === FulfillmentType.Delivery
-          ? runner?.name ?? 'Kuya Jun Reyes'
-          : 'Seller Pickup',
+        fulfillment === FulfillmentType.Delivery ? 'Pending Seller Approval' : 'Seller Pickup',
+      cashCollected: false,
       createdAt: nowLabel,
       orderDateIso: todayIso,
       dueDateLabel:
         paymentMethod === PaymentMethod.Debt ? nextDueLabel : undefined,
       source: 'marketplace',
-      commissionEarned: ownerShare,
+      commissionEarned: ownerShare * qty,
+      sellerId: target.sellerId,
+      sellerName: target.sellerName,
+      debtSettled: paymentMethod === PaymentMethod.Debt ? false : true,
+      debtPaidAmount: 0,
       logs: [
         {
-          id: `lg-mkt-${Date.now()}`,
+          id: `lg-mkt-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
           timestamp: nowLabel,
-          event: `Purchased coworker listing "${target.title}" via ${paymentMethod}`,
+          event: `Order placed (${qty}×) via ${paymentMethod} (${fulfillment}) — Waiting for ${target.sellerName} to confirm & release stock`,
           actor: currentUser.name,
         },
       ],
     };
 
-    const nextStock = Math.max(0, target.stock - 1);
-    const nextSold = target.soldCount + 1;
-    const nextDebt =
-      paymentMethod === PaymentMethod.Debt
-        ? currentUser.debtBalance + totalAmount
-        : currentUser.debtBalance;
-    const nextSpent = currentUser.totalSpent + totalAmount;
+    setOrders((prev) => [newOrder, ...prev]);
+    void saveOrder(newOrder);
+  };
 
-    setListings((prev) =>
-      prev.map((l) =>
-        l.id === listingId ? { ...l, stock: nextStock, soldCount: nextSold } : l
+  const handleSellerConfirmOrder = async (orderId: string): Promise<void> => {
+    if (!currentUser) return;
+    const targetOrder = orders.find((o) => o.id === orderId);
+    if (!targetOrder) {
+      throw new Error(`Order ${orderId} not found.`);
+    }
+    if (!isOrderPendingSellerConfirmation(targetOrder)) {
+      throw new Error(`Order ${orderId} has already been processed.`);
+    }
+    if (targetOrder.sellerId && targetOrder.sellerId !== currentUser.id) {
+      throw new Error('Only the seller who posted this item can confirm the order.');
+    }
+
+    const stockPatches: Array<{ listingId: string; nextStock: number; nextSold: number }> = [];
+    for (const line of targetOrder.items) {
+      const listing = listings.find((l) => l.id === line.itemId);
+      if (listing) {
+        if (listing.stock < line.quantity) {
+          throw new Error(
+            `Not enough stock for "${listing.title}" (${listing.stock} left, need ${line.quantity}).`
+          );
+        }
+        stockPatches.push({
+          listingId: listing.id,
+          nextStock: Math.max(0, listing.stock - line.quantity),
+          nextSold: listing.soldCount + line.quantity,
+        });
+      }
+    }
+
+    const isPickup = targetOrder.fulfillment === FulfillmentType.Pickup;
+    const isCash = targetOrder.paymentMethod === PaymentMethod.Cash;
+    const defaultRunner = users.find((u) => u.role === UserRole.DeliveryStaff);
+    const runnerName = isPickup
+      ? 'Seller Pickup'
+      : defaultRunner?.name ?? 'Delivery Runner';
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const nowLabel = `${todayIso} ${nowTime}`;
+
+    const nextLogs = [
+      ...(targetOrder.logs ?? []),
+      {
+        id: `lg-sel-conf-${Date.now()}`,
+        timestamp: nowLabel,
+        event: isPickup
+          ? `Order confirmed & stock released by ${currentUser.name} (Pickup)`
+          : `Order confirmed & stock released by ${currentUser.name} — Queued for Delivery Staff`,
+        actor: currentUser.name,
+      },
+    ];
+
+    const updatedOrder: StoreOrder = {
+      ...targetOrder,
+      status: isPickup ? 'Completed' : 'Confirmed',
+      deliveryStatus: isPickup ? 'Delivered' : 'Pending Dispatch',
+      assignedRunnerId: isPickup ? undefined : defaultRunner?.id,
+      assignedRunner: runnerName,
+      deliveredAt: isPickup ? nowLabel : targetOrder.deliveredAt,
+      cashCollected: isPickup && isCash ? true : targetOrder.cashCollected,
+      logs: nextLogs,
+    };
+
+    const prevOrders = orders;
+    const prevListings = listings;
+
+    setOrders((prev) => prev.map((o) => (o.id === orderId ? updatedOrder : o)));
+    if (stockPatches.length > 0) {
+      setListings((prev) =>
+        prev.map((l) => {
+          const patch = stockPatches.find((p) => p.listingId === l.id);
+          return patch ? { ...l, stock: patch.nextStock, soldCount: patch.nextSold } : l;
+        })
+      );
+    }
+
+    try {
+      await Promise.all(
+        stockPatches.map((p) =>
+          updateMarketplaceListingStock(p.listingId, p.nextStock, p.nextSold)
+        )
+      );
+      await updateMarketplaceOrderConfirmation(orderId, {
+        status: updatedOrder.status,
+        deliveryStatus: updatedOrder.deliveryStatus,
+        assignedRunnerId: updatedOrder.assignedRunnerId,
+        assignedRunner: updatedOrder.assignedRunner,
+        deliveredAt: updatedOrder.deliveredAt,
+        cashCollected: updatedOrder.cashCollected,
+        logs: nextLogs,
+      });
+    } catch (err) {
+      setOrders(prevOrders);
+      setListings(prevListings);
+      throw err;
+    }
+  };
+
+  const handleSellerRejectOrder = async (orderId: string): Promise<void> => {
+    if (!currentUser) return;
+    const targetOrder = orders.find((o) => o.id === orderId);
+    if (!targetOrder) {
+      throw new Error(`Order ${orderId} not found.`);
+    }
+    if (!isOrderPendingSellerConfirmation(targetOrder)) {
+      throw new Error(`Order ${orderId} has already been processed.`);
+    }
+
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const nowLabel = `${todayIso} ${nowTime}`;
+    const nextLogs = [
+      ...(targetOrder.logs ?? []),
+      {
+        id: `lg-sel-rej-${Date.now()}`,
+        timestamp: nowLabel,
+        event: `Order declined by seller ${currentUser.name} (no stock or ledger balance applied)`,
+        actor: currentUser.name,
+      },
+    ];
+
+    const prevOrders = orders;
+    setOrders((prev) =>
+      prev.map((o) =>
+        o.id === orderId
+          ? { ...o, status: 'Rejected', deliveryStatus: 'Cancelled', logs: nextLogs }
+          : o
       )
     );
-    setOrders((prev) => [newOrder, ...prev]);
-    setAuthUser((prev) =>
-      prev && prev.id === currentUser.id
-        ? { ...prev, debtBalance: nextDebt, totalSpent: nextSpent }
-        : prev
-    );
 
-    void updateMarketplaceListingStock(listingId, nextStock, nextSold);
-    void updateUserCheckoutTotals(currentUser.id, nextDebt, nextSpent);
-    void saveOrder(newOrder);
+    try {
+      await updateMarketplaceOrderConfirmation(orderId, {
+        status: 'Rejected',
+        deliveryStatus: 'Cancelled',
+        logs: nextLogs,
+      });
+    } catch (err) {
+      setOrders(prevOrders);
+      throw err;
+    }
+  };
+
+  const handleSendSellerDebtReminder = async (payload: {
+    buyerId: string;
+    buyerName: string;
+    orderIds: string[];
+    amount: number;
+    itemSummary: string;
+    dueLabel: string;
+    customMessage?: string;
+  }): Promise<void> => {
+    if (!currentUser) return;
+    const sellerDisplay = currentUser.name;
+    const title = `Payment Reminder from ${sellerDisplay} · ${formatPHP(payload.amount, true)}`.slice(
+      0,
+      140
+    );
+    const body = (
+      payload.customMessage?.trim() ||
+      `Hi ${payload.buyerName}, friendly reminder to settle ${formatPHP(
+        payload.amount,
+        true
+      )} for ${payload.itemSummary} (${payload.orderIds.join(', ')}) due ${payload.dueLabel}.`
+    ).slice(0, 500);
+
+    await createNotificationDoc({
+      id: `notif-seller-rem-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      title,
+      body,
+      timestamp: 'Just now',
+      type: 'reminder',
+      read: false,
+      targetUserId: payload.buyerId,
+    });
+  };
+
+  const handleMarkSellerOrderDebtSettled = async (
+    orderId: string,
+    settled: boolean
+  ): Promise<void> => {
+    const target = orders.find((o) => o.id === orderId);
+    if (!target || !currentUser) return;
+    const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const nowLabel = `${todayIso} ${nowTime}`;
+    const settledAt = settled ? nowLabel : '';
+    const debtPaidAmount = settled ? getOrderItemsSubtotal(target) : 0;
+    const nextLogs = [
+      ...(target.logs ?? []),
+      {
+        id: `lg-settle-${Date.now()}`,
+        timestamp: nowLabel,
+        event: settled
+          ? `Seller marked debt order as Paid / Settled`
+          : `Seller reopened debt order as Unpaid`,
+        actor: currentUser.name,
+      },
+    ];
+
+    const prevOrders = orders;
+    setOrders((prev) =>
+      prev.map((o) =>
+        o.id === orderId
+          ? {
+              ...o,
+              debtSettled: settled,
+              debtPaidAmount,
+              settledAt: settled ? nowLabel : undefined,
+              logs: nextLogs,
+            }
+          : o
+      )
+    );
+    try {
+      await markMarketplaceOrderDebtSettled(
+        orderId,
+        settled,
+        settledAt,
+        nextLogs,
+        debtPaidAmount
+      );
+    } catch (err) {
+      setOrders(prevOrders);
+      throw err;
+    }
+  };
+
+  const handleUpdateSellerListingConfig = async (
+    listingId: string,
+    patch: Partial<
+      Pick<
+        MarketplaceListing,
+        | 'title'
+        | 'description'
+        | 'price'
+        | 'stock'
+        | 'paused'
+        | 'allowCash'
+        | 'allowDebt'
+        | 'pickupNote'
+        | 'paymentDetails'
+      >
+    >
+  ): Promise<void> => {
+    const prevListings = listings;
+    setListings((prev) =>
+      prev.map((l) => (l.id === listingId ? { ...l, ...patch } : l))
+    );
+    try {
+      await updateSellerListingConfig(listingId, patch);
+    } catch (err) {
+      setListings(prevListings);
+      throw err;
+    }
+  };
+
+  const handleSaveSellerConfig = async (nextConfig: SellerConfig): Promise<void> => {
+    const prevConfig = sellerConfig;
+    setSellerConfig(nextConfig);
+    try {
+      await saveSellerConfig(nextConfig);
+    } catch (err) {
+      setSellerConfig(prevConfig);
+      throw err;
+    }
   };
 
   const handleRequestLoan = (principal: number, months: number) => {
@@ -951,7 +1599,10 @@ export default function App() {
 
     if (payload.method !== 'Cash' && payload.proofImage) {
       const newProof: PaymentProof = {
-        id: `PRF-${Date.now().toString().slice(-6)}`,
+        id: `PRF-${Date.now().toString(36).toUpperCase()}-${Math.random()
+          .toString(36)
+          .slice(2, 5)
+          .toUpperCase()}`,
         userId: currentUser.id,
         userName: currentUser.name,
         amount: payload.amount,
@@ -1032,7 +1683,10 @@ export default function App() {
   }) => {
     if (!currentUser) return;
     const newProof: PaymentProof = {
-      id: `PRF-${Date.now().toString().slice(-6)}`,
+      id: `PRF-${Date.now().toString(36).toUpperCase()}-${Math.random()
+        .toString(36)
+        .slice(2, 5)
+        .toUpperCase()}`,
       userId: currentUser.id,
       userName: currentUser.name,
       amount: payload.amount,
@@ -1056,9 +1710,218 @@ export default function App() {
     });
   };
 
+  const handleSubmitSellerDebtProof = async (payload: {
+    sellerId: string;
+    sellerName: string;
+    amount: number;
+    channel: string;
+    referenceNo: string;
+    imageDataUrl: string;
+    orderIds: string[];
+  }): Promise<void> => {
+    if (!currentUser) return;
+    const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const newProof: PaymentProof = {
+      id: `PRFS-${Date.now().toString(36).toUpperCase()}-${Math.random()
+        .toString(36)
+        .slice(2, 5)
+        .toUpperCase()}`,
+      userId: currentUser.id,
+      userName: currentUser.name,
+      amount: payload.amount,
+      channel: payload.channel,
+      referenceNo: payload.referenceNo,
+      purpose: 'Community Seller Settlement',
+      imageDataUrl: payload.imageDataUrl,
+      submittedAt: `${todayIso} ${nowTime}`,
+      status: 'pending',
+      sellerId: payload.sellerId,
+      sellerName: payload.sellerName,
+      orderIds: payload.orderIds.slice(0, 50),
+    };
+
+    const prevProofs = proofs;
+    setProofs((prev) => [newProof, ...prev]);
+    try {
+      await savePaymentProof(newProof);
+      await createNotificationDoc({
+        id: `notif-sel-prf-${Date.now()}`,
+        title: `Community Debt Payment Submitted (${formatPHP(payload.amount, true)})`.slice(
+          0,
+          140
+        ),
+        body: `${currentUser.name} uploaded a ${payload.channel} receipt (Ref ${payload.referenceNo}) for your community item debt. Verify it on Seller Dashboard.`.slice(
+          0,
+          500
+        ),
+        timestamp: 'Just now',
+        type: 'payment',
+        read: false,
+        targetUserId: payload.sellerId,
+      });
+    } catch (err) {
+      setProofs(prevProofs);
+      throw err;
+    }
+  };
+
+  const handleReviewSellerProof = async (
+    proofId: string,
+    decision: 'approved' | 'rejected'
+  ): Promise<void> => {
+    if (!currentUser) return;
+    const target = proofs.find((p) => p.id === proofId);
+    if (
+      !target ||
+      target.status !== 'pending' ||
+      target.purpose !== 'Community Seller Settlement' ||
+      target.sellerId !== currentUser.id
+    ) {
+      return;
+    }
+
+    const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const nowLabel = `${todayIso} ${nowTime}`;
+    const updatedProof: PaymentProof = {
+      ...target,
+      status: decision,
+      reviewedBy: currentUser.name,
+      reviewedAt: nowLabel,
+    };
+
+    const prevProofs = proofs;
+    const prevOrders = orders;
+    setProofs((prev) => prev.map((p) => (p.id === proofId ? updatedProof : p)));
+
+    try {
+      if (decision === 'rejected') {
+        await savePaymentProof(updatedProof);
+        await createNotificationDoc({
+          id: `notif-sel-rej-${Date.now()}`,
+          title: `Community Debt Payment Rejected (${target.referenceNo})`.slice(0, 140),
+          body: `${currentUser.name} requested a clearer proof re-upload for your ${formatPHP(
+            target.amount,
+            true
+          )} ${target.channel} payment.`.slice(0, 500),
+          timestamp: 'Just now',
+          type: 'payment',
+          read: false,
+          targetUserId: target.userId,
+        });
+        return;
+      }
+
+      const myListingIds = new Set(
+        listings.filter((l) => l.sellerId === currentUser.id).map((l) => l.id)
+      );
+
+      const candidateOrders = orders
+        .filter(
+          (o) =>
+            o.source === 'marketplace' &&
+            o.userId === target.userId &&
+            o.paymentMethod === PaymentMethod.Debt &&
+            (o.status === 'Confirmed' || o.status === 'Completed') &&
+            !o.debtSettled &&
+            (target.orderIds?.includes(o.id) ||
+              o.sellerId === currentUser.id ||
+              o.items.some((li) => myListingIds.has(li.itemId)))
+        )
+        .sort((a, b) => {
+          const aIn = target.orderIds?.includes(a.id) ? 0 : 1;
+          const bIn = target.orderIds?.includes(b.id) ? 0 : 1;
+          if (aIn !== bIn) return aIn - bIn;
+          return (a.orderDateIso || '').localeCompare(b.orderDateIso || '');
+        });
+
+      let remaining = target.amount;
+      const updatedMap = new Map<string, StoreOrder>();
+      const orderPatches: Array<{
+        orderId: string;
+        debtSettled: boolean;
+        debtPaidAmount: number;
+        settledAt?: string;
+        logs: StoreOrder['logs'] extends Array<infer T> ? T[] : never;
+      }> = [];
+
+      for (const ord of candidateOrders) {
+        if (remaining <= 0.009) break;
+        const itemSubtotal = getOrderItemsSubtotal(ord);
+        const prevPaid = Math.max(0, Number(ord.debtPaidAmount ?? 0));
+        const orderRemaining = Math.max(0, itemSubtotal - prevPaid);
+        if (orderRemaining <= 0.009) continue;
+
+        const isFullSettlement = remaining + 0.01 >= orderRemaining;
+        const applied = isFullSettlement ? orderRemaining : remaining;
+        const nextPaidAmount = isFullSettlement
+          ? itemSubtotal
+          : Number((prevPaid + applied).toFixed(2));
+        remaining = Math.max(0, remaining - applied);
+
+        const nextLogs = [
+          ...(ord.logs ?? []),
+          {
+            id: `lg-prf-settle-${Date.now()}-${ord.id}`,
+            timestamp: nowLabel,
+            event: isFullSettlement
+              ? `Seller approved ${target.channel} proof (${target.referenceNo}) & settled community debt`
+              : `Seller approved partial ${target.channel} payment (${formatPHP(
+                  applied,
+                  true
+                )}, Ref ${target.referenceNo})`,
+            actor: currentUser.name,
+          },
+        ];
+
+        const nextOrder: StoreOrder = {
+          ...ord,
+          debtSettled: isFullSettlement,
+          debtPaidAmount: nextPaidAmount,
+          settledAt: isFullSettlement ? nowLabel : ord.settledAt,
+          logs: nextLogs,
+        };
+
+        updatedMap.set(ord.id, nextOrder);
+        orderPatches.push({
+          orderId: ord.id,
+          debtSettled: isFullSettlement,
+          debtPaidAmount: nextPaidAmount,
+          settledAt: isFullSettlement ? nowLabel : undefined,
+          logs: nextLogs,
+        });
+      }
+
+      if (updatedMap.size > 0) {
+        setOrders((prev) => prev.map((o) => updatedMap.get(o.id) ?? o));
+      }
+
+      await approveSellerProofAndSettleOrders(updatedProof, orderPatches);
+
+      await createNotificationDoc({
+        id: `notif-sel-app-${Date.now()}`,
+        title: `Community Debt Payment Approved (${target.referenceNo})`.slice(0, 140),
+        body: `${currentUser.name} verified your ${formatPHP(target.amount, true)} ${target.channel} payment on your community debt.`.slice(
+          0,
+          500
+        ),
+        timestamp: 'Just now',
+        type: 'payment',
+        read: false,
+        targetUserId: target.userId,
+      });
+    } catch (err) {
+      setProofs(prevProofs);
+      setOrders(prevOrders);
+      throw err;
+    }
+  };
+
   const handleReviewProof = (proofId: string, decision: 'approved' | 'rejected') => {
     const target = proofs.find((p) => p.id === proofId);
     if (!target || target.status !== 'pending') return;
+    if (target.purpose === 'Community Seller Settlement') return;
 
     const updatedProof: PaymentProof = {
       ...target,
@@ -1070,16 +1933,23 @@ export default function App() {
     setProofs((prev) => prev.map((p) => (p.id === proofId ? updatedProof : p)));
     void savePaymentProof(updatedProof);
 
+    const isDebtPaymentProof =
+      target.purpose === 'Store Debt Settlement' ||
+      target.purpose === 'Pautangan Repayment' ||
+      Boolean(target.loanId);
+
     if (decision === 'rejected') {
-      void createNotificationDoc({
-        id: `notif-rej-${Date.now()}`,
-        title: `Payment Proof Rejected (${target.referenceNo})`,
-        body: `Admin requested re-upload for ${target.userName}'s ${target.channel} payment.`,
-        timestamp: 'Just now',
-        type: 'payment',
-        read: false,
-        targetUserId: target.userId,
-      });
+      if (isDebtPaymentProof) {
+        void createNotificationDoc({
+          id: `notif-rej-${Date.now()}`,
+          title: `${target.loanId ? 'Loan' : 'Debt'} Payment Proof Rejected (${target.referenceNo})`.slice(0, 140),
+          body: `Admin requested re-upload for ${target.userName}'s ${target.channel} debt payment (${formatPHP(target.amount, true)}).`.slice(0, 500),
+          timestamp: 'Just now',
+          type: 'payment',
+          read: false,
+          targetUserId: target.userId,
+        });
+      }
       return;
     }
 
@@ -1099,9 +1969,15 @@ export default function App() {
     if (target.orderId) {
       const targetOrder = orders.find((o) => o.id === target.orderId);
       if (targetOrder) {
-        const updatedOrder: StoreOrder = { ...targetOrder, status: 'Confirmed' };
-        setOrders((prev) => prev.map((o) => (o.id === updatedOrder.id ? updatedOrder : o)));
-        void saveOrder(updatedOrder);
+        if (isOrderPendingAdminConfirmation(targetOrder)) {
+          void approveOrderInternal(targetOrder.id, { skipProofId: proofId }).catch((err) => {
+            console.error('Failed to approve & release stock for order proof:', err);
+          });
+        } else {
+          const updatedOrder: StoreOrder = { ...targetOrder, status: 'Confirmed' };
+          setOrders((prev) => prev.map((o) => (o.id === updatedOrder.id ? updatedOrder : o)));
+          void saveOrder(updatedOrder);
+        }
       }
     }
 
@@ -1144,15 +2020,17 @@ export default function App() {
       }
     }
 
-    void createNotificationDoc({
-      id: `notif-app-${Date.now()}`,
-      title: `Payment Proof Approved (${target.referenceNo})`,
-      body: `${formatPHP(target.amount, true)} ${target.channel} payment verified by ${currentUser?.name ?? 'Admin'}.`,
-      timestamp: 'Just now',
-      type: 'payment',
-      read: false,
-      targetUserId: target.userId,
-    });
+    if (isDebtPaymentProof) {
+      void createNotificationDoc({
+        id: `notif-app-${Date.now()}`,
+        title: `${target.loanId ? 'Loan' : 'Debt'} Payment Approved (${target.referenceNo})`.slice(0, 140),
+        body: `${formatPHP(target.amount, true)} ${target.channel} payment on your debt was verified by ${currentUser?.name ?? 'Admin'}.`.slice(0, 500),
+        timestamp: 'Just now',
+        type: 'payment',
+        read: false,
+        targetUserId: target.userId,
+      });
+    }
   };
 
   const handleReviewListing = (
@@ -1170,23 +2048,6 @@ export default function App() {
     }
     setListings((prev) => prev.map((l) => (l.id === listingId ? updated : l)));
     void saveMarketplaceListing(updated);
-    if (target.sellerId) {
-      void createNotificationDoc({
-        id: `notif-mktrev-${Date.now()}`,
-        title:
-          decision === 'approved'
-            ? `For-Sale Listing Approved · ${target.title}`
-            : `For-Sale Listing Rejected · ${target.title}`,
-        body:
-          decision === 'approved'
-            ? `Your listing "${target.title}" is now live in the Coworker For-Sale Feed.`
-            : `Your listing "${target.title}" was declined by Super Admin and hidden from the store.`,
-        timestamp: 'Just now',
-        type: 'marketplace',
-        read: false,
-        targetUserId: target.sellerId,
-      });
-    }
   };
 
   const handleDeleteListing = async (listingId: string): Promise<void> => {
@@ -1262,7 +2123,10 @@ export default function App() {
       ? 'Counter B Walk-in'
       : defaultRunner?.name ?? 'Kuya Jun Reyes';
 
-    const orderId = `ORD-${Date.now().toString().slice(-6)}`;
+    const orderId = `ORD-${Date.now().toString(36).toUpperCase()}-${Math.random()
+      .toString(36)
+      .slice(2, 5)
+      .toUpperCase()}`;
     const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const todayIso = new Date().toISOString().slice(0, 10);
     const nowLabel = `${todayIso} ${nowTime}`;
@@ -1544,15 +2408,6 @@ export default function App() {
     };
     setEWalletPosts((prev) => [newPost, ...prev]);
     void saveEWalletPost(newPost);
-    void createNotificationDoc({
-      id: `notif-ew-${Date.now()}`,
-      title: `New ${payload.type === 'sell' ? 'Sell' : 'Buy'} ${payload.walletProvider} Post`,
-      body: `${currentUser.name} posted ${formatPHP(payload.totalAmount)} ${payload.walletProvider} on Buy/Sell E-Wallet.`,
-      timestamp: 'Just now',
-      type: 'ewallet',
-      read: false,
-      targetUserId: 'all',
-    });
   };
 
   const handleClaimEWalletShare = (postId: string, amount: number, note?: string) => {
@@ -1593,17 +2448,6 @@ export default function App() {
       fills: nextFills,
       comments: target.comments,
     });
-    void createNotificationDoc({
-      id: `notif-ewf-${Date.now()}`,
-      title: `E-Wallet Share Claimed (${target.walletProvider})`,
-      body: `${currentUser.name} took ${formatPHP(take)} from ${target.accountName}'s post (${
-        nextRemaining === 0 ? 'Completed!' : `${formatPHP(nextRemaining)} left`
-      }).`,
-      timestamp: 'Just now',
-      type: 'ewallet',
-      read: false,
-      targetUserId: target.authorId,
-    });
   };
 
   const handleAddEWalletComment = (postId: string, text: string) => {
@@ -1634,6 +2478,20 @@ export default function App() {
       fills: target.fills,
       comments: nextComments,
     });
+
+    if (target.authorId && target.authorId !== currentUser.id) {
+      void createNotificationDoc({
+        id: `notif-ewc-${Date.now()}`,
+        title: `New Comment on Your ${target.walletProvider} Post`.slice(0, 140),
+        body: `${currentUser.name} commented on your ${
+          target.type === 'sell' ? 'Sell' : 'Buy'
+        } ${target.walletProvider} post: "${text.trim().slice(0, 160)}"`.slice(0, 500),
+        timestamp: 'Just now',
+        type: 'ewallet',
+        read: false,
+        targetUserId: target.authorId,
+      });
+    }
   };
 
   const canPersistReadInFirestore = (notif: NotificationItem): boolean => {
@@ -1695,6 +2553,12 @@ export default function App() {
     setIsProfileMenuOpen(false);
   };
 
+  const openSalesOrderTab = () => {
+    if (!isAdminOrSuper) return;
+    setRequestedAdminSubTab({ tab: 'salesOrder', nonce: Date.now() });
+    navigateTo('admin');
+  };
+
   const getRoleDisplayLabel = (role: UserRole) => {
     if (role === UserRole.SuperAdmin) return 'Super Admin';
     if (role === UserRole.Admin) return 'Admin';
@@ -1722,6 +2586,19 @@ export default function App() {
       icon: Users,
       badge: unreadCommunityCount,
     },
+    ...(currentUser && currentRole !== UserRole.Guest
+      ? [
+          {
+            id: 'seller' as ActiveSection,
+            label: 'Seller Dashboard',
+            icon: BarChart3,
+            badge:
+              sellerDebtSummary.pendingOrdersCount +
+              sellerDebtSummary.pendingProofsCount +
+              sellerDebtSummary.unpaidCount,
+          },
+        ]
+      : []),
     ...(canViewPautanganNav
       ? [{ id: 'pautangan' as ActiveSection, label: 'Pautangan', icon: HandCoins }]
       : []),
@@ -1744,7 +2621,7 @@ export default function App() {
             id: 'admin' as ActiveSection,
             label: 'Admin Config',
             icon: ShieldCheck,
-            badge: pendingProofsCount,
+            badge: pendingProofsCount + pendingOrdersCount,
           },
         ]
       : []),
@@ -1967,15 +2844,27 @@ export default function App() {
 
   const topNavLinks = [
     { id: 'store', label: 'Store', badge: 0 },
+    ...(isAdminOrSuper
+      ? [{ id: 'salesOrderShortcut', label: 'Sales Order', badge: pendingOrdersCount }]
+      : []),
     { id: 'ewallet', label: 'Buy/Sell E-Wallet', badge: openEWalletCount },
     { id: 'community', label: 'Community', badge: unreadCommunityCount },
+    ...(currentUser && currentRole !== UserRole.Guest
+      ? [{ id: 'seller', label: 'Seller Hub', badge: sellerDebtSummary.unpaidCount }]
+      : []),
     ...(canViewPautanganNav ? [{ id: 'pautangan', label: 'Pautangan', badge: 0 }] : []),
     ...(canViewDeliveryNav
       ? [{ id: 'delivery', label: 'Delivery', badge: pendingDeliveriesCount }]
       : []),
     // Config tab strictly hidden from public, Coworker, and Delivery Staff
     ...(isAdminOrSuper
-      ? [{ id: 'admin', label: 'Admin Config', badge: pendingProofsCount }]
+      ? [
+          {
+            id: 'admin',
+            label: 'Admin Config',
+            badge: pendingProofsCount + pendingOrdersCount,
+          },
+        ]
       : []),
     { id: 'chat', label: 'Chat', badge: 0 },
   ];
@@ -2018,18 +2907,30 @@ export default function App() {
           {/* Zone 2: Concise single-line desktop web navigation links */}
           <nav className="hidden lg:flex items-center gap-3.5 xl:gap-5 text-[13px] xl:text-sm font-medium text-teal-100/80 min-w-0">
             {topNavLinks.map((link) => {
-              const active = activeSection === link.id;
+              const active =
+                link.id === 'salesOrderShortcut'
+                  ? activeSection === 'admin' && requestedAdminSubTab?.tab === 'salesOrder'
+                  : activeSection === link.id;
               return (
                 <button
                   key={link.id}
                   type="button"
-                  onClick={() => navigateTo(link.id as ActiveSection)}
+                  onClick={() => {
+                    if (link.id === 'salesOrderShortcut') {
+                      openSalesOrderTab();
+                    } else {
+                      navigateTo(link.id as ActiveSection);
+                    }
+                  }}
                   className={`py-1.5 inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                     active
                       ? 'text-white font-semibold border-b-2 border-teal-300'
                       : 'hover:text-white'
                   }`}
                 >
+                  {link.id === 'salesOrderShortcut' && (
+                    <ClipboardList className="w-3.5 h-3.5 text-teal-300 shrink-0" />
+                  )}
                   <span>
                     {link.id === 'ewallet' ? (
                       <>
@@ -2212,6 +3113,21 @@ export default function App() {
                         <button
                           type="button"
                           role="menuitem"
+                          onClick={() => navigateTo('seller')}
+                          className="w-full min-h-[40px] px-3 py-2 rounded-xl text-left text-xs font-semibold text-stone-700 dark:text-stone-200 hover:bg-stone-100 dark:hover:bg-[#172523] flex items-center justify-between gap-2 transition-colors cursor-pointer"
+                        >
+                          <span className="flex items-center gap-2.5">
+                            <BarChart3 className="w-4 h-4 text-teal-700 dark:text-teal-400" />
+                            <span>Seller Dashboard</span>
+                          </span>
+                          <span className="font-mono text-[11px] font-bold text-amber-600 dark:text-amber-400 tabular-nums">
+                            {formatPHP(sellerDebtSummary.collectablesTotal, true)}
+                          </span>
+                        </button>
+
+                        <button
+                          type="button"
+                          role="menuitem"
                           onClick={() => {
                             setIsProfileMenuOpen(false);
                             setIsSignInOpen(true);
@@ -2287,9 +3203,16 @@ export default function App() {
                             if (n.type === 'delivery') {
                               navigateTo(canViewDeliveryNav ? 'delivery' : 'ledger');
                             } else if (n.type === 'payment') {
-                              navigateTo(
-                                n.targetUserId === 'admins' && isAdminOrSuper ? 'admin' : 'ledger'
-                              );
+                              if (n.targetUserId === 'admins' && isAdminOrSuper) {
+                                if (n.title.toLowerCase().includes('awaiting confirmation')) {
+                                  setRequestedAdminSubTab({ tab: 'salesOrder', nonce: Date.now() });
+                                } else {
+                                  setRequestedAdminSubTab({ tab: 'proofs', nonce: Date.now() });
+                                }
+                                navigateTo('admin');
+                              } else {
+                                navigateTo('ledger');
+                              }
                             } else if (n.type === 'marketplace') {
                               navigateTo(
                                 n.targetUserId === 'super_admin' &&
@@ -2362,6 +3285,7 @@ export default function App() {
           {activeSection === 'store' && (
             <StorefrontView
               items={items}
+              isLoading={isStoreLoading}
               cart={cart}
               currentUser={currentUser}
               currentRole={currentRole}
@@ -2373,6 +3297,8 @@ export default function App() {
               onClearCart={() => setCart([])}
               onOpenSignIn={() => setIsSignInOpen(true)}
               onOpenQRShare={() => setIsQROpen(true)}
+              onOpenSalesOrder={isAdminOrSuper ? openSalesOrderTab : undefined}
+              pendingOrdersCount={pendingOrdersCount}
               onPlaceOrder={handlePlaceOrder}
               isCartOpen={isCartOpen}
               setIsCartOpen={setIsCartOpen}
@@ -2406,6 +3332,39 @@ export default function App() {
               onCreateSuggestion={handleCreateSuggestion}
               onCreateListing={handleCreateListing}
               onBuyListing={handleBuyListing}
+              onOpenSellerDashboard={() => navigateTo('seller')}
+              sellerCollectablesTotal={sellerDebtSummary.collectablesTotal}
+              openSellFormSignal={openCommunitySellSignal}
+            />
+          )}
+
+          {activeSection === 'seller' && (
+            <SellerDashboardView
+              currentUser={currentUser}
+              currentRole={currentRole}
+              listings={listings}
+              orders={orders}
+              proofs={proofs}
+              sellerConfig={sellerConfig}
+              nextDueLabel={nextDueLabel}
+              onOpenSignIn={() => setIsSignInOpen(true)}
+              onGoToCommunity={(openSellForm) => {
+                if (openSellForm) {
+                  setOpenCommunitySellSignal((n) => n + 1);
+                }
+                navigateTo('community');
+              }}
+              onConfirmOrder={handleSellerConfirmOrder}
+              onRejectOrder={handleSellerRejectOrder}
+              onReviewSellerProof={handleReviewSellerProof}
+              onSendDebtReminder={handleSendSellerDebtReminder}
+              onMarkOrderDebtSettled={handleMarkSellerOrderDebtSettled}
+              onUpdateListingConfig={handleUpdateSellerListingConfig}
+              onDeleteListing={async (listingId) => {
+                setListings((prev) => prev.filter((l) => l.id !== listingId));
+                await removeMarketplaceListing(listingId);
+              }}
+              onSaveSellerConfig={handleSaveSellerConfig}
             />
           )}
 
@@ -2429,6 +3388,7 @@ export default function App() {
               currentRole={currentRole}
               users={users}
               orders={orders}
+              listings={listings}
               loans={loans}
               proofs={proofs}
               paymentMethods={storeConfig.paymentMethods}
@@ -2437,6 +3397,8 @@ export default function App() {
               nextDueLabel={nextDueLabel}
               onOpenSignIn={() => setIsSignInOpen(true)}
               onSubmitDebtProof={handleSubmitDebtProof}
+              onSubmitSellerDebtProof={handleSubmitSellerDebtProof}
+              onFetchSellerConfig={getSellerConfigById}
             />
           )}
 
@@ -2446,7 +3408,6 @@ export default function App() {
               currentUser={currentUser}
               currentRole={currentRole}
               onUpdateDeliveryStatus={handleUpdateDeliveryStatus}
-              onNotifyCustomer={handleNotifyDeliveryCustomer}
               onExitPreview={isPreviewingOtherRole ? () => setPreviewRole(null) : undefined}
             />
           )}
@@ -2458,7 +3419,7 @@ export default function App() {
               users={users}
               items={items}
               orders={orders}
-              proofs={proofs}
+              proofs={storeProofs}
               listings={listings}
               loans={loans}
               pautanganSettings={pautanganSettings}
@@ -2761,6 +3722,10 @@ export default function App() {
               stockAdjustments={stockAdjustments}
               onAdjustStock={handleAdjustStock}
               onCreateManualSale={handleCreateManualSale}
+              onApprovePendingOrder={handleApprovePendingOrder}
+              onRejectPendingOrder={handleRejectPendingOrder}
+              onSyncAllData={handleSyncAllData}
+              requestedSubTab={requestedAdminSubTab}
               onExitPreview={isPreviewingOtherRole ? () => setPreviewRole(null) : undefined}
             />
           )}
@@ -2845,7 +3810,14 @@ export default function App() {
             ? [{ id: 'delivery', label: 'Delivery', icon: Truck, badge: pendingDeliveriesCount }]
             : [{ id: 'ledger', label: 'Ledger', icon: LayoutDashboard, badge: 0 }]),
           ...(isAdminOrSuper
-            ? [{ id: 'admin', label: 'Config', icon: ShieldCheck, badge: pendingProofsCount }]
+            ? [
+                {
+                  id: 'admin',
+                  label: 'Config',
+                  icon: ShieldCheck,
+                  badge: pendingProofsCount + pendingOrdersCount,
+                },
+              ]
             : [{ id: 'chat', label: 'Chat', icon: MessageSquare, badge: unreadChatCount }]),
         ].map((tab) => {
           const Icon = tab.icon;

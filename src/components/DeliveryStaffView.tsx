@@ -1,6 +1,5 @@
 import React, { useMemo, useState } from 'react';
 import {
-  BellRing,
   CheckCircle2,
   MapPin,
   PackageCheck,
@@ -15,7 +14,7 @@ import {
   UserAccount,
   UserRole,
 } from '../types';
-import { formatPHP, isDateWithinPeriod } from '../utils/format';
+import { formatPHP, isApprovedDeliveryOrder, isDateWithinPeriod } from '../utils/format';
 
 interface DeliveryStaffViewProps {
   orders: StoreOrder[];
@@ -26,7 +25,6 @@ interface DeliveryStaffViewProps {
     status: 'Pending Dispatch' | 'Out for Delivery' | 'Delivered',
     cashCollected?: boolean
   ) => void;
-  onNotifyCustomer: (order: StoreOrder) => void;
   onExitPreview?: () => void;
 }
 
@@ -35,7 +33,6 @@ export const DeliveryStaffView: React.FC<DeliveryStaffViewProps> = ({
   currentUser,
   currentRole,
   onUpdateDeliveryStatus,
-  onNotifyCustomer,
   onExitPreview,
 }) => {
   const [filter, setFilter] = useState<
@@ -53,18 +50,25 @@ export const DeliveryStaffView: React.FC<DeliveryStaffViewProps> = ({
   const canViewCommissionDashboard =
     currentRole === UserRole.DeliveryStaff || currentRole === UserRole.SuperAdmin;
 
+  const dispatchableOrders = useMemo(
+    () => orders.filter(isApprovedDeliveryOrder),
+    [orders]
+  );
+
   const filteredOrders = useMemo(() => {
-    return orders.filter((o) => {
+    return dispatchableOrders.filter((o) => {
       const ds = o.deliveryStatus ?? 'Pending Dispatch';
       if (filter === 'active') return ds !== 'Delivered';
       if (filter === 'delivery_only') return o.fulfillment === FulfillmentType.Delivery;
       return ds === filter;
     });
-  }, [orders, filter]);
+  }, [dispatchableOrders, filter]);
 
   const periodOrders = useMemo(() => {
-    return orders.filter((o) => isDateWithinPeriod(o.orderDateIso, commissionPeriod));
-  }, [orders, commissionPeriod]);
+    return dispatchableOrders.filter((o) =>
+      isDateWithinPeriod(o.orderDateIso, commissionPeriod)
+    );
+  }, [dispatchableOrders, commissionPeriod]);
 
   // Delivery fee is 100% delivery staff commission
   const collectableDebtCommission = useMemo(() => {
@@ -122,11 +126,15 @@ export const DeliveryStaffView: React.FC<DeliveryStaffViewProps> = ({
     );
   }
 
-  const pendingCount = orders.filter(
+  const pendingCount = dispatchableOrders.filter(
     (o) => (o.deliveryStatus ?? 'Pending Dispatch') === 'Pending Dispatch'
   ).length;
-  const outCount = orders.filter((o) => o.deliveryStatus === 'Out for Delivery').length;
-  const deliveredCount = orders.filter((o) => o.deliveryStatus === 'Delivered').length;
+  const outCount = dispatchableOrders.filter(
+    (o) => o.deliveryStatus === 'Out for Delivery'
+  ).length;
+  const deliveredCount = dispatchableOrders.filter(
+    (o) => o.deliveryStatus === 'Delivered'
+  ).length;
 
   const showToast = (msg: string) => {
     setBanner(msg);
@@ -293,7 +301,7 @@ export const DeliveryStaffView: React.FC<DeliveryStaffViewProps> = ({
             No orders in this queue.
           </p>
           <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">
-            New coworker Pickup and Desk Delivery orders appear here automatically.
+            Approved Desk Delivery orders appear here once confirmed &amp; released by Admin on Sales Order. Pickup and unapproved orders never enter the dispatch queue.
           </p>
         </div>
       ) : (
@@ -368,19 +376,6 @@ export const DeliveryStaffView: React.FC<DeliveryStaffViewProps> = ({
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2 shrink-0">
-                  {ds !== 'Delivered' && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onNotifyCustomer(order);
-                        showToast(`Sent delivery arrival alert to ${order.userName}.`);
-                      }}
-                      className="min-h-[38px] inline-flex items-center gap-1.5 rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-[#172523] px-3 py-1.5 text-xs font-semibold text-stone-700 dark:text-stone-200 hover:bg-stone-50 dark:hover:bg-[#1F312E] cursor-pointer"
-                    >
-                      <BellRing className="w-3.5 h-3.5 text-teal-700 dark:text-teal-400" />
-                      <span>Ping Customer</span>
-                    </button>
-                  )}
 
                   {ds === 'Pending Dispatch' && (
                     <button

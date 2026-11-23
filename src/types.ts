@@ -28,6 +28,7 @@ export type ActiveSection =
   | 'store'
   | 'ewallet'
   | 'community'
+  | 'seller'
   | 'pautangan'
   | 'ledger'
   | 'delivery'
@@ -116,8 +117,20 @@ export interface StoreOrder {
   fulfillment: FulfillmentType;
   deliveryNote?: string;
   paymentMethod: string;
-  status: 'Confirmed' | 'Pending Payment Proof' | 'Completed';
-  deliveryStatus?: 'Pending Dispatch' | 'Out for Delivery' | 'Delivered';
+  status:
+    | 'Confirmed'
+    | 'Pending Payment Proof'
+    | 'Completed'
+    | 'Pending Admin Review'
+    | 'Pending Seller Confirmation'
+    | 'Rejected';
+  deliveryStatus?:
+    | 'Pending Dispatch'
+    | 'Out for Delivery'
+    | 'Delivered'
+    | 'Pending Admin Approval'
+    | 'Pending Seller Approval'
+    | 'Cancelled';
   assignedRunnerId?: string;
   assignedRunner?: string;
   cashCollected?: boolean;
@@ -127,6 +140,11 @@ export interface StoreOrder {
   dueDateLabel?: string;
   source: 'store' | 'marketplace';
   commissionEarned?: number;
+  sellerId?: string;
+  sellerName?: string;
+  debtSettled?: boolean;
+  debtPaidAmount?: number;
+  settledAt?: string;
   logs: OrderLogEntry[];
 }
 
@@ -159,7 +177,11 @@ export interface PaymentProof {
   amount: number;
   channel: string;
   referenceNo: string;
-  purpose: 'Store Debt Settlement' | 'Order Payment' | 'Pautangan Repayment';
+  purpose:
+    | 'Store Debt Settlement'
+    | 'Order Payment'
+    | 'Pautangan Repayment'
+    | 'Community Seller Settlement';
   imageDataUrl: string;
   submittedAt: string;
   status: 'pending' | 'approved' | 'rejected';
@@ -167,6 +189,9 @@ export interface PaymentProof {
   reviewedAt?: string;
   orderId?: string;
   loanId?: string;
+  sellerId?: string;
+  sellerName?: string;
+  orderIds?: string[];
 }
 
 export interface SuggestionItem {
@@ -197,6 +222,24 @@ export interface MarketplaceListing {
   approvalStatus: 'pending' | 'approved' | 'rejected';
   createdAt: string;
   image?: string;
+  paused?: boolean;
+  allowCash?: boolean;
+  allowDebt?: boolean;
+  pickupNote?: string;
+  paymentDetails?: string;
+}
+
+export interface SellerConfig {
+  userId: string;
+  gcashNumber?: string;
+  mayaNumber?: string;
+  paymentNotes?: string;
+  defaultPickupNote?: string;
+  defaultReminderTemplate: string;
+  defaultAllowCash: boolean;
+  defaultAllowDebt: boolean;
+  notifyOnNewSale?: boolean;
+  updatedAt?: string;
 }
 
 export interface PautanganSettings {
