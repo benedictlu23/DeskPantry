@@ -348,10 +348,10 @@ async function startServer() {
         `Current signed-in coworker: ${ctx.userName ?? 'Coworker'} (role: ${ctx.userRole ?? 'member'}).`,
         `Their current store credit (debt) balance is ₱${Number(ctx.debtBalance ?? 0).toFixed(2)}.`,
         `Store debt due dates are on the ${dueStr} of each month. Digital payments (GCash, Maya, MariBank) require uploading a proof-of-payment screenshot for Admin confirmation.`,
-        'Confidentiality policy: Never discuss, disclose, quote, or calculate Pautangan, cash assistance loans, interest rates, or loan eligibility. If a user asks about Pautangan or cash loans, politely explain that Pautangan is confidential and managed directly via Admin configuration—direct them to check their Pautangan tab if enabled for their account or contact the Store Admin.',
-        ctx.catalogSummary ? `Current store highlights: ${ctx.catalogSummary}` : '',
+        'Confidentiality policy: Never discuss, disclose, quote, or calculate Cash Assistance terms, eligibility, limits, interest rates, or loan balances. If a user asks about Cash Assistance or cash loans, politely explain that Cash Assistance is a confidential add-on module and direct authorized Store Owners or users to check their Cash Assistance tab (if enabled) or contact the Store Admin / Platform Admin.',
+        ctx.catalogSummary ? `Current multi-store catalog highlights: ${ctx.catalogSummary}` : '',
         typeof ctx.pendingProofsCount === 'number'
-          ? `Pending payment proofs awaiting admin verification: ${ctx.pendingProofsCount}.`
+          ? `Pending payment proofs awaiting review: ${ctx.pendingProofsCount}.`
           : '',
       ]
         .filter(Boolean)

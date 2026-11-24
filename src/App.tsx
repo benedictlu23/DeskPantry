@@ -27,6 +27,7 @@ import {
   X,
 } from 'lucide-react';
 import { AdminConsoleView } from './components/AdminConsoleView';
+import { CashAssistanceView } from './components/CashAssistanceView';
 import { ChatHubView } from './components/ChatHubView';
 import { CommunityFeedView } from './components/CommunityFeedView';
 import { DeliveryStaffView } from './components/DeliveryStaffView';
@@ -39,15 +40,17 @@ import { GeminiChatbotDrawer } from './components/GeminiChatbotDrawer';
 import { LedgerDashboardView } from './components/LedgerDashboardView';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { OtherAppsView } from './components/OtherAppsView';
-import { PautanganView } from './components/PautanganView';
 import { PWAInstallButton } from './components/PWAInstallButton';
 import { QRShareModal } from './components/QRShareModal';
 import { SellerDashboardView } from './components/SellerDashboardView';
 import { SignInModal } from './components/SignInModal';
 import { StorefrontView } from './components/StorefrontView';
+import { StoreOwnerWorkspaceView } from './components/StoreOwnerWorkspaceView';
 import { WorkstationSetupModal } from './components/WorkstationSetupModal';
 import {
-  INITIAL_PAUTANGAN_SETTINGS,
+  DEFAULT_PAYMENT_METHODS,
+  INITIAL_CASH_ASSISTANCE_SETTINGS,
+  INITIAL_PLATFORM_CONFIG,
   INITIAL_STORE_CONFIG,
   OWNER_BASE_COMMISSION_EARNED,
 } from './data/seedData';
@@ -55,6 +58,8 @@ import { auth } from './firebase';
 import {
   addChatMessageToThread,
   approveSellerProofAndSettleOrders,
+  approveStoreApplicationAndProvisionStore,
+  assignDeliveryStaffToStore,
   clearInternalAppImage,
   clearMarketplaceListingImage,
   clearPaymentProofImage,
@@ -68,31 +73,41 @@ import {
   deleteNotificationDoc,
   deleteNotificationDocs,
   deleteSuggestionDoc,
+  ensureMultiStoreFoundation,
   getSellerConfigById,
   markMarketplaceOrderDebtSettled,
   markNotificationReadDoc,
   markThreadUnreadCount,
   recordStockAdjustment,
+  rejectStoreApplication,
   removeMarketplaceListing,
   removeStoreItem,
+  requestStoreCashAssistanceAddon,
+  reviewStoreCashAssistanceAddon,
+  saveCashAssistanceSettings,
+  saveCatalogTemplate,
   saveEWalletPost,
   saveInternalApp,
   saveLoanRecord,
   saveMarketplaceListing,
   saveOrder,
-  savePautanganSettings,
   savePaymentProof,
+  savePlatformConfig,
   saveSellerConfig,
   saveStoreConfig,
+  saveStoreCustomerCredit,
   saveStoreItem,
+  saveStoreProfile,
   saveSuggestion,
   saveUserAccount,
   seedInitialFirestoreDataIfEmpty,
+  submitStoreApplication,
   subscribeAuthenticatedData,
   subscribePublicStoreData,
   syncAllFirestoreDataNow,
   syncOwnerCommissionToStoreConfig,
   toggleInternalAppInstalled,
+  toggleStoreCashAssistanceVisibility,
   updateEWalletPostPartial,
   updateMarketplaceListingStock,
   updateMarketplaceOrderConfirmation,
@@ -109,6 +124,9 @@ import {
 import {
   ActiveSection,
   CartItem,
+  CashAssistanceSettings,
+  CashAssistanceSubscriptionStatus,
+  CatalogTemplate,
   ChatThread,
   CommissionType,
   CoworkerProfile,
@@ -118,14 +136,19 @@ import {
   LoanRecord,
   MarketplaceListing,
   NotificationItem,
-  PautanganSettings,
   PaymentMethod,
   PaymentProof,
+  PlatformConfig,
   SellerConfig,
   StockAdjustmentLog,
+  StoreApplication,
+  StoreCashAssistanceConfig,
   StoreConfig,
+  StoreCustomerCredit,
   StoreItem,
   StoreOrder,
+  StoreProfile,
+  StoreSubscriptionStatus,
   SuggestionComment,
   SuggestionItem,
   UserAccount,
@@ -134,6 +157,9 @@ import {
 import {
   buildLoanInstallments,
   computeCommission,
+  DEFAULT_STORE_ID,
+  DEFAULT_STORE_NAME,
+  DEFAULT_STORE_OWNER_ID,
   formatBuyerWorkstation,
   formatPHP,
   getNextDueDateLabel,
@@ -142,6 +168,9 @@ import {
   isApprovedDeliveryOrder,
   isOrderPendingAdminConfirmation,
   isOrderPendingSellerConfirmation,
+  resolveOrderPaymentType,
+  resolveOrderStoreId,
+  resolveOrderStoreName,
 } from './utils/format';
 
 const DARK_MODE_STORAGE_KEY = 'deskpantry_dark_mode';
@@ -173,9 +202,20 @@ export default function App() {
   const [suggestions, setSuggestions] = useState<SuggestionItem[]>([]);
   const [listings, setListings] = useState<MarketplaceListing[]>([]);
   const [ewalletPosts, setEWalletPosts] = useState<EWalletPost[]>([]);
-  const [pautanganSettings, setPautanganSettings] = useState<PautanganSettings>(
-    INITIAL_PAUTANGAN_SETTINGS
+  const [cashAssistanceSettings, setCashAssistanceSettings] =
+    useState<CashAssistanceSettings>(INITIAL_CASH_ASSISTANCE_SETTINGS);
+  const [platformConfig, setPlatformConfig] = useState<PlatformConfig>(
+    INITIAL_PLATFORM_CONFIG
   );
+  const [stores, setStores] = useState<StoreProfile[]>([]);
+  const [storeCashAssistance, setStoreCashAssistance] = useState<
+    StoreCashAssistanceConfig[]
+  >([]);
+  const [storeApplications, setStoreApplications] = useState<StoreApplication[]>([]);
+  const [catalogTemplates, setCatalogTemplates] = useState<CatalogTemplate[]>([]);
+  const [storeCustomerCredits, setStoreCustomerCredits] = useState<
+    StoreCustomerCredit[]
+  >([]);
   const [storeConfig, setStoreConfig] = useState<StoreConfig>(INITIAL_STORE_CONFIG);
   const [loans, setLoans] = useState<LoanRecord[]>([]);
   const [stockAdjustments, setStockAdjustments] = useState<StockAdjustmentLog[]>([]);
@@ -192,6 +232,11 @@ export default function App() {
   );
 
   const [activeSection, setActiveSection] = useState<ActiveSection>('store');
+  const [requestedStoreWorkspace, setRequestedStoreWorkspace] = useState<{
+    storeId: string;
+    tab?: string;
+    nonce: number;
+  } | null>(null);
   const [requestedChatThreadId, setRequestedChatThreadId] = useState<{
     threadId: string;
     nonce: number;
@@ -203,7 +248,7 @@ export default function App() {
       | 'stockAdjustments'
       | 'salesOrder'
       | 'config'
-      | 'pautangan'
+      | 'cashAssistance'
       | 'superadmin'
       | 'proofs'
       | 'marketplace'
@@ -220,10 +265,10 @@ export default function App() {
   const [isWorkstationFirstTime, setIsWorkstationFirstTime] = useState(false);
   const promptedWorkstationUidRef = useRef<string | null>(null);
 
-  const dueDaysRef = useRef<[number, number]>(pautanganSettings.dueDays);
+  const dueDaysRef = useRef<[number, number]>(cashAssistanceSettings.dueDays);
   useEffect(() => {
-    dueDaysRef.current = pautanganSettings.dueDays;
-  }, [pautanganSettings.dueDays]);
+    dueDaysRef.current = cashAssistanceSettings.dueDays;
+  }, [cashAssistanceSettings.dueDays]);
 
   // Prompt newly signed-in users once to enter Department Name, Table Row & Table Number
   useEffect(() => {
@@ -293,7 +338,7 @@ export default function App() {
     }
   }, [authUser?.id]);
 
-  // Public storefront catalog & store config live subscription (visible to Guests & signed-in users)
+  // Public storefront catalog, stores & store config live subscription
   useEffect(() => {
     const unsubPublic = subscribePublicStoreData({
       onItems: (nextItems) => {
@@ -305,11 +350,14 @@ export default function App() {
         setStoreConfig(rest);
         if (Array.isArray(syncedDueDays) && syncedDueDays.length === 2) {
           dueDaysRef.current = [Number(syncedDueDays[0]), Number(syncedDueDays[1])];
-          setPautanganSettings((prev) => ({
+          setCashAssistanceSettings((prev) => ({
             ...prev,
             dueDays: [Number(syncedDueDays[0]), Number(syncedDueDays[1])],
           }));
         }
+      },
+      onStores: (nextStores) => {
+        setStores(nextStores);
       },
     });
     return () => unsubPublic();
@@ -336,6 +384,10 @@ export default function App() {
         setStockAdjustments([]);
         setThreads([]);
         setNotifications([]);
+        setStoreCashAssistance([]);
+        setStoreApplications([]);
+        setCatalogTemplates([]);
+        setStoreCustomerCredits([]);
         setSellerConfig(null);
         setLocalReadNotifIds({});
         setDismissedNotifIds({});
@@ -352,6 +404,7 @@ export default function App() {
 
           if (account.role === UserRole.Admin || account.role === UserRole.SuperAdmin) {
             void seedInitialFirestoreDataIfEmpty(account.email);
+            void ensureMultiStoreFoundation(account.id);
           }
         } catch (err) {
           console.error('Failed to sync signed-in user profile:', err);
@@ -366,7 +419,8 @@ export default function App() {
     };
   }, []);
 
-  // Authenticated Firestore real-time subscriptions keyed by verified UID, role & Pautangan permission
+  // Authenticated Firestore real-time subscriptions keyed by verified UID, role, owned stores & Cash Assistance permission
+  const authOwnedStoresKey = (authUser?.ownedStoreIds ?? []).join(',');
   useEffect(() => {
     if (!authUser) return;
 
@@ -374,7 +428,8 @@ export default function App() {
       {
         uid: authUser.id,
         role: authUser.role,
-        pautanganEnabled: authUser.pautanganEnabled,
+        cashAssistanceEnabled: authUser.cashAssistanceEnabled,
+        ownedStoreIds: authUser.ownedStoreIds ?? [],
       },
       {
         onCurrentUser: (updated) => {
@@ -406,9 +461,9 @@ export default function App() {
         onEWalletPosts: (nextPosts) => {
           setEWalletPosts(nextPosts);
         },
-        onPautanganSettings: (nextSettings) => {
+        onCashAssistanceSettings: (nextSettings) => {
           dueDaysRef.current = nextSettings.dueDays;
-          setPautanganSettings(nextSettings);
+          setCashAssistanceSettings(nextSettings);
         },
         onLoans: (nextLoans) => {
           setLoans(nextLoans);
@@ -428,11 +483,31 @@ export default function App() {
         onSellerConfig: (nextSellerCfg) => {
           setSellerConfig(nextSellerCfg);
         },
+        onPlatformConfig: (nextPlatformCfg) => {
+          setPlatformConfig(nextPlatformCfg);
+        },
+        onStoreCashAssistance: (nextConfigs) => {
+          setStoreCashAssistance(nextConfigs);
+        },
+        onStoreApplications: (nextApps) => {
+          setStoreApplications(nextApps);
+        },
+        onCatalogTemplates: (nextTemplates) => {
+          setCatalogTemplates(nextTemplates);
+        },
+        onStoreCustomerCredits: (nextCredits) => {
+          setStoreCustomerCredits(nextCredits);
+        },
       }
     );
 
     return () => unsubData();
-  }, [authUser?.id, authUser?.role, authUser?.pautanganEnabled]);
+  }, [
+    authUser?.id,
+    authUser?.role,
+    authUser?.cashAssistanceEnabled,
+    authOwnedStoresKey,
+  ]);
 
   const actualRole = authUser ? authUser.role : UserRole.Guest;
   const isActualSuperAdmin = actualRole === UserRole.SuperAdmin;
@@ -452,10 +527,38 @@ export default function App() {
     currentRole === UserRole.Admin || currentRole === UserRole.SuperAdmin;
   const canViewDeliveryNav =
     currentRole === UserRole.DeliveryStaff || isAdminOrSuper;
-  const canViewPautanganNav = Boolean(
+
+  const isStoreOwnerUser = useMemo(() => {
+    if (!currentUser || currentRole === UserRole.Guest) return false;
+    if (isAdminOrSuper) return true;
+    return (
+      (currentUser.ownedStoreIds?.length ?? 0) > 0 ||
+      stores.some((s) => s.ownerId === currentUser.id)
+    );
+  }, [currentUser, currentRole, isAdminOrSuper, stores]);
+
+  const canManageStore = (storeId?: string, storeOwnerId?: string): boolean => {
+    if (isActualAdmin) return true;
+    if (!authUser?.id) return false;
+    if (storeOwnerId && storeOwnerId === authUser.id) return true;
+    const sid = storeId || DEFAULT_STORE_ID;
+    const matched = stores.find((s) => s.id === sid);
+    if (matched && matched.ownerId === authUser.id) return true;
+    return (authUser.ownedStoreIds ?? []).includes(sid);
+  };
+
+  // Strict Confidentiality: Cash Assistance is never visible as a locked upsell to non-store-owners.
+  // Store Owners only see it when visibleToOwner === true (controlled by Admin / Super Admin).
+  const canViewCashAssistanceNav = Boolean(
     currentUser &&
-      currentUser.pautanganEnabled &&
-      (pautanganSettings.globalEnabled || currentRole === UserRole.SuperAdmin)
+      (currentRole === UserRole.SuperAdmin ||
+        (currentUser.cashAssistanceEnabled &&
+          (cashAssistanceSettings.globalEnabled || isAdminOrSuper)) ||
+        storeCashAssistance.some(
+          (c) =>
+            c.storeOwnerId === currentUser.id &&
+            (c.visibleToOwner === true || c.status === 'active')
+        ))
   );
 
   // Ensure each signed-in coworker has a private DeskPantry AI conversation thread (ai-<uid>)
@@ -501,14 +604,25 @@ export default function App() {
     if (activeSection === 'delivery' && !canViewDeliveryNav) {
       setActiveSection('store');
     }
-    if (activeSection === 'pautangan' && !canViewPautanganNav) {
+    if (activeSection === 'storeOwner' && !isStoreOwnerUser) {
       setActiveSection('store');
     }
-  }, [currentUser, currentRole, activeSection, isAdminOrSuper, canViewDeliveryNav, canViewPautanganNav]);
+    if (activeSection === 'cashAssistance' && !canViewCashAssistanceNav) {
+      setActiveSection('store');
+    }
+  }, [
+    currentUser,
+    currentRole,
+    activeSection,
+    isAdminOrSuper,
+    canViewDeliveryNav,
+    isStoreOwnerUser,
+    canViewCashAssistanceNav,
+  ]);
 
   const nextDueLabel = useMemo(
-    () => getNextDueDateLabel(pautanganSettings.dueDays),
-    [pautanganSettings.dueDays]
+    () => getNextDueDateLabel(cashAssistanceSettings.dueDays),
+    [cashAssistanceSettings.dueDays]
   );
 
   const ownerCommissionEarned = useMemo(
@@ -657,8 +771,14 @@ export default function App() {
         return true;
       }
 
-      // 4. Unread coworker chat messages
-      if (n.type === 'chat') return true;
+      // 4. Unread coworker chat messages, store updates & Cash Assistance notices
+      if (
+        n.type === 'chat' ||
+        n.type === 'store' ||
+        n.type === 'cash_assistance'
+      ) {
+        return true;
+      }
 
       return false;
     };
@@ -877,55 +997,65 @@ export default function App() {
     }
   };
 
-  const handlePlaceOrder = (payload: {
-    fulfillment: FulfillmentType;
-    deliveryNote: string;
-    paymentMethod: string;
-    proofChannel?: string;
-    proofRef?: string;
-    proofImage?: string;
-    buyerDepartment?: string;
-    buyerTableRow?: string;
-    buyerTableNumber?: string;
-  }) => {
+  const handleSubmitStoreApplication = async (payload: {
+    storeName: string;
+    description: string;
+    paymentChannels: string;
+  }): Promise<void> => {
+    if (!currentUser) {
+      throw new Error('Sign in first to apply for a store.');
+    }
+    const newApp: StoreApplication = {
+      id: `app-${Date.now().toString(36)}`,
+      applicantId: currentUser.id,
+      applicantName: currentUser.name,
+      applicantDepartment: currentUser.department || 'Team',
+      storeName: payload.storeName.trim(),
+      description: payload.description.trim(),
+      paymentChannels: payload.paymentChannels.trim() || 'Cash, GCash, Maya',
+      quotedBaseFee: platformConfig.baseStoreMonthlyFee,
+      status: 'pending',
+      createdAt: new Date().toISOString().slice(0, 10),
+    };
+    setStoreApplications((prev) => [newApp, ...prev]);
+    try {
+      await submitStoreApplication(newApp);
+      await createNotificationDoc({
+        id: `notif-storeapp-${Date.now()}`,
+        title: `New Store Application · ${newApp.storeName}`.slice(0, 140),
+        body: `${currentUser.name} (${currentUser.department}) applied to open "${newApp.storeName}". Review in Developer Settings.`.slice(
+          0,
+          500
+        ),
+        timestamp: 'Just now',
+        type: 'store',
+        read: false,
+        targetUserId: 'super_admin',
+      });
+    } catch (err) {
+      setStoreApplications((prev) => prev.filter((a) => a.id !== newApp.id));
+      throw err;
+    }
+  };
+
+  const handlePlaceSplitOrder = async (payload: {
+    groups: Array<{
+      storeId: string;
+      storeName: string;
+      fulfillment: FulfillmentType;
+      deliveryNote: string;
+      paymentMethod: string;
+      proofChannel?: string;
+      proofRef?: string;
+      proofImage?: string;
+      items: Array<{ itemId: string; quantity: number }>;
+    }>;
+    buyerDepartment: string;
+    buyerTableRow: string;
+    buyerTableNumber: string;
+  }): Promise<void> => {
     if (!currentUser) return;
-
-    const orderItems = cart
-      .map((c) => {
-        const item = items.find((i) => i.id === c.itemId);
-        if (!item) return null;
-        return {
-          itemId: item.id,
-          name: item.name,
-          quantity: c.quantity,
-          unitPrice: item.price,
-        };
-      })
-      .filter((x): x is NonNullable<typeof x> => x !== null);
-
-    if (orderItems.length === 0) return;
-    const subtotal = orderItems.reduce((sum, i) => sum + i.quantity * i.unitPrice, 0);
-    const deliveryFee =
-      payload.fulfillment === FulfillmentType.Delivery && storeConfig.deliveryEnabled
-        ? storeConfig.deliveryFee
-        : 0;
-    const totalAmount = subtotal + deliveryFee;
-
-    const isDigital = Boolean(payload.proofChannel && payload.proofImage);
-    const isDebt = payload.paymentMethod === PaymentMethod.Debt;
-    const orderId = `ORD-${Date.now().toString(36).toUpperCase()}-${Math.random()
-      .toString(36)
-      .slice(2, 5)
-      .toUpperCase()}`;
-    const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const todayIso = new Date().toISOString().slice(0, 10);
-    const nowLabel = `${todayIso} ${nowTime}`;
-
-    const isPickup = payload.fulfillment === FulfillmentType.Pickup;
-    const defaultRunner = users.find((u) => u.role === UserRole.DeliveryStaff);
-    const runnerName = isPickup
-      ? 'Pick Up'
-      : defaultRunner?.name ?? 'Kuya Jun Reyes';
+    if (payload.groups.length === 0) return;
 
     const cleanBuyerDept = payload.buyerDepartment?.trim() || currentUser.department;
     const cleanBuyerRow = payload.buyerTableRow?.trim() || currentUser.tableRow || '';
@@ -946,94 +1076,234 @@ export default function App() {
       }).catch(() => {});
     }
 
-    const newOrder: StoreOrder = {
-      id: orderId,
-      userId: currentUser.id,
-      userName: currentUser.name,
-      buyerDepartment: cleanBuyerDept || undefined,
-      buyerTableRow: cleanBuyerRow || undefined,
-      buyerTableNumber: cleanBuyerTable || undefined,
-      items: orderItems,
-      totalAmount,
-      deliveryFee,
-      deliveryCommission: deliveryFee,
-      fulfillment: payload.fulfillment,
-      deliveryNote: payload.deliveryNote || undefined,
-      paymentMethod: payload.paymentMethod,
-      status: 'Pending Admin Review',
-      deliveryStatus: 'Pending Admin Approval',
-      assignedRunnerId: isPickup ? undefined : defaultRunner?.id,
-      assignedRunner: runnerName,
-      cashCollected: false,
-      createdAt: nowLabel,
-      orderDateIso: todayIso,
-      dueDateLabel: isDebt ? nextDueLabel : undefined,
-      source: 'store',
-      logs: [
-        {
-          id: `lg-${Date.now()}-1`,
-          timestamp: nowLabel,
-          event: `Order placed via ${payload.paymentMethod} (${payload.fulfillment}) — Waiting on Sales Order for Admin confirmation & stock release`,
-          actor: currentUser.name,
-        },
-        ...(deliveryFee > 0
-          ? [
-              {
-                id: `lg-${Date.now()}-2`,
-                timestamp: nowLabel,
-                event: `Assigned runner ${runnerName} (${formatPHP(deliveryFee)} fee — dispatched only after Admin approval)`,
-                actor: 'System',
-              },
-            ]
-          : []),
-      ],
-    };
+    const nowTime = new Date().toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const nowLabel = `${todayIso} ${nowTime}`;
+    const fallbackRunner = users.find((u) => u.role === UserRole.DeliveryStaff);
 
-    // Stock, customer debt/spend, and delivery staff dispatch wait for explicit Admin approval on Sales Order.
-    setCart([]);
-    setOrders((prev) => [newOrder, ...prev]);
-    void saveOrder(newOrder);
+    const createdOrders: StoreOrder[] = [];
+    const createdProofs: PaymentProof[] = [];
 
-    if (isDigital && payload.proofChannel && payload.proofImage) {
-      const newProof: PaymentProof = {
-        id: `PRF-${Date.now().toString(36).toUpperCase()}-${Math.random()
-          .toString(36)
-          .slice(2, 5)
-          .toUpperCase()}`,
+    for (const group of payload.groups) {
+      const storeObj = stores.find((s) => s.id === group.storeId);
+      if (storeObj?.subscriptionStatus === 'suspended') {
+        throw new Error(`${group.storeName} is currently suspended and cannot accept orders.`);
+      }
+
+      const storeOwnerId = storeObj?.ownerId || DEFAULT_STORE_OWNER_ID;
+      const storeDueDays = storeObj?.dueDays ?? cashAssistanceSettings.dueDays;
+      const storeDueLabel = getNextDueDateLabel(storeDueDays);
+      const deliveryEnabled = storeObj
+        ? storeObj.deliveryEnabled
+        : storeConfig.deliveryEnabled;
+      const storeDeliveryFee = storeObj
+        ? storeObj.deliveryFee
+        : storeConfig.deliveryFee;
+
+      const orderItems = group.items
+        .map((line) => {
+          const item = items.find((i) => i.id === line.itemId);
+          if (!item) return null;
+          return {
+            itemId: item.id,
+            name: item.name,
+            quantity: line.quantity,
+            unitPrice: item.price,
+          };
+        })
+        .filter((x): x is NonNullable<typeof x> => x !== null);
+
+      if (orderItems.length === 0) continue;
+
+      const subtotal = orderItems.reduce(
+        (sum, li) => sum + li.quantity * li.unitPrice,
+        0
+      );
+      const deliveryFee =
+        group.fulfillment === FulfillmentType.Delivery && deliveryEnabled
+          ? storeDeliveryFee
+          : 0;
+      const commissionPct = platformConfig.deliveryCommissionRate ?? 100;
+      const deliveryCommission =
+        deliveryFee > 0 ? Math.round((deliveryFee * commissionPct) / 100) : 0;
+      const totalAmount = subtotal + deliveryFee;
+
+      const isDigital = Boolean(group.proofChannel && group.proofImage);
+      const paymentType = resolveOrderPaymentType({
+        paymentMethod: group.paymentMethod,
+      });
+      const isDebt = paymentType === 'credit';
+      const isPickup = group.fulfillment === FulfillmentType.Pickup;
+
+      const assignedStaffIds = storeObj?.assignedDeliveryStaffIds ?? [];
+      const preferredRunnerId = assignedStaffIds[0] ?? fallbackRunner?.id;
+      const preferredRunnerName =
+        users.find((u) => u.id === preferredRunnerId)?.name ??
+        coworkerProfiles.find((c) => c.id === preferredRunnerId)?.name ??
+        fallbackRunner?.name ??
+        'Kuya Jun Reyes';
+      const runnerName = isPickup ? 'Pick Up' : preferredRunnerName;
+
+      const orderId = `ORD-${Date.now().toString(36).toUpperCase()}-${Math.random()
+        .toString(36)
+        .slice(2, 5)
+        .toUpperCase()}`;
+
+      const newOrder: StoreOrder = {
+        id: orderId,
+        storeId: group.storeId,
+        storeName: group.storeName,
+        storeOwnerId,
+        assignedDeliveryStaffIds: assignedStaffIds,
         userId: currentUser.id,
         userName: currentUser.name,
-        amount: totalAmount,
-        channel: payload.proofChannel,
-        referenceNo: payload.proofRef || 'REF-PENDING',
-        purpose: 'Order Payment',
-        imageDataUrl: payload.proofImage,
-        submittedAt: nowLabel,
-        status: 'pending',
-        orderId,
+        buyerDepartment: cleanBuyerDept || undefined,
+        buyerTableRow: cleanBuyerRow || undefined,
+        buyerTableNumber: cleanBuyerTable || undefined,
+        items: orderItems,
+        subtotal,
+        totalAmount,
+        deliveryFee,
+        deliveryCommission,
+        fulfillment: group.fulfillment,
+        deliveryNote: group.deliveryNote || undefined,
+        paymentMethod: group.paymentMethod,
+        paymentType,
+        status: 'Pending Admin Review',
+        deliveryStatus: 'Pending Admin Approval',
+        assignedRunnerId: isPickup ? undefined : preferredRunnerId,
+        assignedRunner: runnerName,
+        cashCollected: false,
+        createdAt: nowLabel,
+        orderDateIso: todayIso,
+        dueDateLabel: isDebt ? storeDueLabel : undefined,
+        source: 'store',
+        logs: [
+          {
+            id: `lg-${Date.now()}-${createdOrders.length}-1`,
+            timestamp: nowLabel,
+            event: `Order placed at ${group.storeName} via ${group.paymentMethod} (${
+              isPickup ? 'Pick Up' : 'Delivery'
+            }) — Waiting for store owner confirmation & stock release`,
+            actor: currentUser.name,
+          },
+          ...(deliveryFee > 0
+            ? [
+                {
+                  id: `lg-${Date.now()}-${createdOrders.length}-2`,
+                  timestamp: nowLabel,
+                  event: `Assigned runner ${runnerName} (${formatPHP(deliveryCommission)} commission — dispatched after confirmation)`,
+                  actor: 'System',
+                },
+              ]
+            : []),
+        ],
       };
-      setProofs((prev) => [newProof, ...prev]);
-      void savePaymentProof(newProof);
 
+      createdOrders.push(newOrder);
+
+      if (isDigital && group.proofChannel && group.proofImage) {
+        const newProof: PaymentProof = {
+          id: `PRF-${Date.now().toString(36).toUpperCase()}-${Math.random()
+            .toString(36)
+            .slice(2, 5)
+            .toUpperCase()}`,
+          storeId: group.storeId,
+          storeName: group.storeName,
+          storeOwnerId,
+          userId: currentUser.id,
+          userName: currentUser.name,
+          amount: totalAmount,
+          channel: group.proofChannel,
+          referenceNo: group.proofRef || 'REF-PENDING',
+          purpose: 'Order Payment',
+          imageDataUrl: group.proofImage,
+          submittedAt: nowLabel,
+          status: 'pending',
+          orderId,
+        };
+        createdProofs.push(newProof);
+      }
+    }
+
+    if (createdOrders.length === 0) return;
+
+    setCart([]);
+    setOrders((prev) => [...createdOrders, ...prev]);
+    if (createdProofs.length > 0) {
+      setProofs((prev) => [...createdProofs, ...prev]);
+    }
+
+    await Promise.all([
+      ...createdOrders.map((ord) => saveOrder(ord)),
+      ...createdProofs.map((prf) => savePaymentProof(prf)),
+    ]);
+
+    for (const ord of createdOrders) {
+      const targetRecipient =
+        ord.storeOwnerId && ord.storeOwnerId !== currentUser.id
+          ? ord.storeOwnerId
+          : 'admins';
       void createNotificationDoc({
-        id: `notif-pay-${Date.now()}`,
-        title: `New Store Order Awaiting Confirmation · ${orderId}`,
-        body: `${currentUser.name} submitted ${formatPHP(totalAmount, true)} (${payload.proofChannel}) for ${payload.fulfillment}. Approve on Sales Order to release stock.`,
+        id: `notif-ord-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        title: `New ${ord.storeName} Order Awaiting Confirmation · ${ord.id}`.slice(0, 140),
+        body: `${currentUser.name} placed ${formatPHP(ord.totalAmount, true)} via ${ord.paymentMethod} (${
+          ord.fulfillment === FulfillmentType.Pickup ? 'Pick Up' : 'Delivery'
+        }). Confirm in Store Workspace.`.slice(0, 500),
         timestamp: 'Just now',
-        type: 'payment',
+        type: 'store',
         read: false,
-        targetUserId: 'admins',
-      });
-    } else {
-      void createNotificationDoc({
-        id: `notif-ord-${Date.now()}`,
-        title: `New Store Order Awaiting Confirmation · ${orderId}`,
-        body: `${currentUser.name} placed a ${payload.fulfillment} order via ${payload.paymentMethod} (${formatPHP(totalAmount, true)}). Approve on Sales Order to release stock.`,
-        timestamp: 'Just now',
-        type: 'payment',
-        read: false,
-        targetUserId: 'admins',
+        targetUserId: targetRecipient,
       });
     }
+  };
+
+  const handlePlaceOrder = (payload: {
+    fulfillment: FulfillmentType;
+    deliveryNote: string;
+    paymentMethod: string;
+    proofChannel?: string;
+    proofRef?: string;
+    proofImage?: string;
+    buyerDepartment?: string;
+    buyerTableRow?: string;
+    buyerTableNumber?: string;
+  }) => {
+    if (!currentUser) return;
+    const grouped = new Map<string, Array<{ itemId: string; quantity: number }>>();
+    for (const entry of cart) {
+      const product = items.find((i) => i.id === entry.itemId);
+      const sid = product?.storeId || DEFAULT_STORE_ID;
+      const arr = grouped.get(sid) ?? [];
+      arr.push({ itemId: entry.itemId, quantity: entry.quantity });
+      grouped.set(sid, arr);
+    }
+    const groups = Array.from(grouped.entries()).map(([storeId, lineItems]) => {
+      const st = stores.find((s) => s.id === storeId);
+      return {
+        storeId,
+        storeName:
+          st?.name ||
+          items.find((i) => i.storeId === storeId)?.storeName ||
+          DEFAULT_STORE_NAME,
+        fulfillment: payload.fulfillment,
+        deliveryNote: payload.deliveryNote,
+        paymentMethod: payload.paymentMethod,
+        proofChannel: payload.proofChannel,
+        proofRef: payload.proofRef,
+        proofImage: payload.proofImage,
+        items: lineItems,
+      };
+    });
+    void handlePlaceSplitOrder({
+      groups,
+      buyerDepartment: payload.buyerDepartment || currentUser.department,
+      buyerTableRow: payload.buyerTableRow || currentUser.tableRow || '',
+      buyerTableNumber: payload.buyerTableNumber || currentUser.tableNumber || '',
+    });
   };
 
   const approveOrderInternal = async (
@@ -1044,18 +1314,28 @@ export default function App() {
     if (!targetOrder) {
       throw new Error(`Order ${orderId} not found.`);
     }
+    if (!canManageStore(targetOrder.storeId, targetOrder.storeOwnerId)) {
+      throw new Error('Only the Store Owner or an Admin can confirm this store order.');
+    }
     if (!isOrderPendingAdminConfirmation(targetOrder)) {
       throw new Error(`Order ${orderId} has already been processed.`);
     }
 
     const wasPendingAdminReview = targetOrder.status === 'Pending Admin Review';
     const isPickup = targetOrder.fulfillment === FulfillmentType.Pickup;
-    const isCash = targetOrder.paymentMethod === PaymentMethod.Cash;
-    const isDebt = targetOrder.paymentMethod === PaymentMethod.Debt;
-    const actorName = authUser?.name ?? currentUser?.name ?? 'Admin';
+    const paymentType = resolveOrderPaymentType(targetOrder);
+    const isCash = paymentType === 'cash';
+    const isDebt = paymentType === 'credit';
+    const actorName = authUser?.name ?? currentUser?.name ?? 'Store Owner';
     const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const todayIso = new Date().toISOString().slice(0, 10);
     const nowLabel = `${todayIso} ${nowTime}`;
+
+    const storeId = resolveOrderStoreId(targetOrder);
+    const storeObj = stores.find((s) => s.id === storeId);
+    const storeName = storeObj?.name || resolveOrderStoreName(targetOrder);
+    const storeOwnerId =
+      targetOrder.storeOwnerId || storeObj?.ownerId || DEFAULT_STORE_OWNER_ID;
 
     if (targetOrder.source !== 'marketplace') {
       for (const line of targetOrder.items) {
@@ -1068,20 +1348,37 @@ export default function App() {
       }
     }
 
-    const defaultRunner = users.find((u) => u.role === UserRole.DeliveryStaff);
+    const assignedStaffIds =
+      storeObj?.assignedDeliveryStaffIds ?? targetOrder.assignedDeliveryStaffIds ?? [];
+    const defaultRunner =
+      users.find((u) => assignedStaffIds.includes(u.id)) ??
+      users.find((u) => u.role === UserRole.DeliveryStaff);
+    const preferredRunnerId =
+      targetOrder.assignedRunnerId ?? assignedStaffIds[0] ?? defaultRunner?.id;
+    const preferredRunnerName =
+      users.find((u) => u.id === preferredRunnerId)?.name ??
+      coworkerProfiles.find((c) => c.id === preferredRunnerId)?.name ??
+      defaultRunner?.name ??
+      'Kuya Jun Reyes';
+
     const runnerName = isPickup
       ? 'Pick Up'
       : targetOrder.assignedRunner &&
           targetOrder.assignedRunner !== 'Counter B Pickup' &&
           targetOrder.assignedRunner !== 'Pick Up'
         ? targetOrder.assignedRunner
-        : defaultRunner?.name ?? 'Kuya Jun Reyes';
+        : preferredRunnerName;
 
     const updatedOrder: StoreOrder = {
       ...targetOrder,
+      storeId,
+      storeName,
+      storeOwnerId,
+      assignedDeliveryStaffIds: assignedStaffIds,
+      paymentType,
       status: isPickup ? 'Completed' : 'Confirmed',
       deliveryStatus: isPickup ? 'Delivered' : 'Pending Dispatch',
-      assignedRunnerId: isPickup ? undefined : targetOrder.assignedRunnerId ?? defaultRunner?.id,
+      assignedRunnerId: isPickup ? undefined : preferredRunnerId,
       assignedRunner: runnerName,
       deliveredAt: isPickup ? nowLabel : targetOrder.deliveredAt,
       cashCollected: isPickup && isCash ? true : targetOrder.cashCollected,
@@ -1091,8 +1388,8 @@ export default function App() {
           id: `lg-app-${Date.now()}`,
           timestamp: nowLabel,
           event: isPickup
-            ? `Approved & stock released by ${actorName} (${targetOrder.fulfillment}) — Pick Up Completed`
-            : `Approved & stock released by ${actorName} — Dispatched to ${runnerName}`,
+            ? `Confirmed & stock released by ${actorName} (${storeName}) — Pick Up Completed`
+            : `Confirmed & stock released by ${actorName} (${storeName}) — Dispatched to ${runnerName}`,
           actor: actorName,
         },
       ],
@@ -1102,6 +1399,7 @@ export default function App() {
     const previousItems = items;
     const previousUsers = users;
     const previousProofs = proofs;
+    const previousCredits = storeCustomerCredits;
 
     const stockUpdates: Array<{ itemId: string; nextStock: number; nextSold: number }> = [];
     if (targetOrder.source !== 'marketplace') {
@@ -1127,11 +1425,41 @@ export default function App() {
       );
     }
 
+    let nextStoreCredit: StoreCustomerCredit | null = null;
+    if (wasPendingAdminReview && isDebt && targetOrder.userId && targetOrder.userId !== 'walk-in') {
+      const creditId = `${storeId}__${targetOrder.userId}`;
+      const existingCredit = storeCustomerCredits.find((c) => c.id === creditId);
+      nextStoreCredit = {
+        id: creditId,
+        storeId,
+        storeName,
+        storeOwnerId,
+        userId: targetOrder.userId,
+        userName: targetOrder.userName,
+        balance: Math.max(0, (existingCredit?.balance ?? 0) + targetOrder.totalAmount),
+        totalCharged: Math.max(
+          0,
+          (existingCredit?.totalCharged ?? 0) + targetOrder.totalAmount
+        ),
+        totalPaid: existingCredit?.totalPaid ?? 0,
+        updatedAt: todayIso,
+      };
+      setStoreCustomerCredits((prev) => {
+        const exists = prev.some((c) => c.id === creditId);
+        return exists
+          ? prev.map((c) => (c.id === creditId ? nextStoreCredit! : c))
+          : [nextStoreCredit!, ...prev];
+      });
+    }
+
     const targetCustomer =
       targetOrder.userId && targetOrder.userId !== 'walk-in'
         ? users.find((u) => u.id === targetOrder.userId) ??
           (authUser?.id === targetOrder.userId ? authUser : undefined)
         : undefined;
+    const canWriteBuyerUserDoc = Boolean(
+      targetCustomer && (isActualAdmin || targetCustomer.id === authUser?.id)
+    );
     const shouldUpdateCustomerTotals = wasPendingAdminReview && Boolean(targetCustomer);
     const nextDebt =
       shouldUpdateCustomerTotals && targetCustomer
@@ -1143,18 +1471,37 @@ export default function App() {
       shouldUpdateCustomerTotals && targetCustomer
         ? targetCustomer.totalSpent + targetOrder.totalAmount
         : 0;
+    const nextStoreDebtMap =
+      shouldUpdateCustomerTotals && targetCustomer
+        ? {
+            ...(targetCustomer.storeDebtBalances ?? {}),
+            ...(nextStoreCredit ? { [storeId]: nextStoreCredit.balance } : {}),
+          }
+        : undefined;
 
     if (shouldUpdateCustomerTotals && targetCustomer) {
       setUsers((prev) =>
         prev.map((u) =>
           u.id === targetCustomer.id
-            ? { ...u, debtBalance: nextDebt, totalSpent: nextSpent }
+            ? {
+                ...u,
+                debtBalance: nextDebt,
+                totalSpent: nextSpent,
+                ...(nextStoreDebtMap ? { storeDebtBalances: nextStoreDebtMap } : {}),
+              }
             : u
         )
       );
       if (authUser?.id === targetCustomer.id) {
         setAuthUser((prev) =>
-          prev ? { ...prev, debtBalance: nextDebt, totalSpent: nextSpent } : prev
+          prev
+            ? {
+                ...prev,
+                debtBalance: nextDebt,
+                totalSpent: nextSpent,
+                ...(nextStoreDebtMap ? { storeDebtBalances: nextStoreDebtMap } : {}),
+              }
+            : prev
         );
       }
     }
@@ -1169,7 +1516,7 @@ export default function App() {
       setProofs((prev) =>
         prev.map((p) =>
           linkedPendingProofs.some((lp) => lp.id === p.id)
-            ? { ...p, status: 'approved', reviewedBy: actorName, reviewedAt: 'Just now' }
+            ? { ...p, status: 'approved', reviewedBy: actorName, reviewedAt: nowLabel }
             : p
         )
       );
@@ -1182,8 +1529,16 @@ export default function App() {
           stockUpdates.map((u) => updateStoreItemStock(u.itemId, u.nextStock, u.nextSold))
         );
       }
-      if (shouldUpdateCustomerTotals && targetCustomer) {
-        await updateUserCheckoutTotals(targetCustomer.id, nextDebt, nextSpent);
+      if (nextStoreCredit) {
+        await saveStoreCustomerCredit(nextStoreCredit);
+      }
+      if (shouldUpdateCustomerTotals && targetCustomer && canWriteBuyerUserDoc) {
+        await updateUserCheckoutTotals(
+          targetCustomer.id,
+          nextDebt,
+          nextSpent,
+          nextStoreDebtMap
+        );
       }
       if (linkedPendingProofs.length > 0) {
         await Promise.all(
@@ -1192,7 +1547,7 @@ export default function App() {
               ...p,
               status: 'approved',
               reviewedBy: actorName,
-              reviewedAt: 'Just now',
+              reviewedAt: nowLabel,
             })
           )
         );
@@ -1202,14 +1557,18 @@ export default function App() {
       setItems(previousItems);
       setUsers(previousUsers);
       setProofs(previousProofs);
+      setStoreCustomerCredits(previousCredits);
       throw err;
     }
 
     if (!isPickup) {
       void createNotificationDoc({
         id: `notif-del-${Date.now()}`,
-        title: `Approved Delivery Order · ${updatedOrder.id}`,
-        body: `${updatedOrder.userName}'s order is approved for desk delivery (${updatedOrder.deliveryNote || 'Office Floor'}).`,
+        title: `Approved ${storeName} Delivery · ${updatedOrder.id}`.slice(0, 140),
+        body: `${updatedOrder.userName}'s order from ${storeName} is ready for desk delivery (${updatedOrder.deliveryNote || 'Office Floor'}).`.slice(
+          0,
+          500
+        ),
         timestamp: 'Just now',
         type: 'delivery',
         read: false,
@@ -1219,25 +1578,29 @@ export default function App() {
   };
 
   const handleApprovePendingOrder = async (orderId: string): Promise<void> => {
-    if (!isActualAdmin) {
-      throw new Error('Admin access required to confirm sales orders.');
+    const targetOrder = orders.find((o) => o.id === orderId);
+    if (!targetOrder) {
+      throw new Error(`Order ${orderId} not found.`);
+    }
+    if (!canManageStore(targetOrder.storeId, targetOrder.storeOwnerId)) {
+      throw new Error('Store Owner or Admin access required to confirm sales orders.');
     }
     await approveOrderInternal(orderId);
   };
 
   const handleRejectPendingOrder = async (orderId: string): Promise<void> => {
-    if (!isActualAdmin) {
-      throw new Error('Admin access required to reject sales orders.');
-    }
     const targetOrder = orders.find((o) => o.id === orderId);
     if (!targetOrder) {
       throw new Error(`Order ${orderId} not found.`);
+    }
+    if (!canManageStore(targetOrder.storeId, targetOrder.storeOwnerId)) {
+      throw new Error('Store Owner or Admin access required to reject sales orders.');
     }
     if (!isOrderPendingAdminConfirmation(targetOrder)) {
       throw new Error(`Order ${orderId} has already been processed.`);
     }
 
-    const actorName = authUser?.name ?? currentUser?.name ?? 'Admin';
+    const actorName = authUser?.name ?? currentUser?.name ?? 'Store Owner';
     const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const todayIso = new Date().toISOString().slice(0, 10);
     const nowLabel = `${todayIso} ${nowTime}`;
@@ -1251,7 +1614,7 @@ export default function App() {
         {
           id: `lg-rej-${Date.now()}`,
           timestamp: nowLabel,
-          event: 'Order rejected on Sales Order (no stock or debt released)',
+          event: 'Order rejected by store owner (no stock or credit charged)',
           actor: actorName,
         },
       ],
@@ -1268,7 +1631,7 @@ export default function App() {
       setProofs((prev) =>
         prev.map((p) =>
           linkedPendingProofs.some((lp) => lp.id === p.id)
-            ? { ...p, status: 'rejected', reviewedBy: actorName, reviewedAt: 'Just now' }
+            ? { ...p, status: 'rejected', reviewedBy: actorName, reviewedAt: nowLabel }
             : p
         )
       );
@@ -1283,7 +1646,7 @@ export default function App() {
               ...p,
               status: 'rejected',
               reviewedBy: actorName,
-              reviewedAt: 'Just now',
+              reviewedAt: nowLabel,
             })
           )
         );
@@ -1307,10 +1670,16 @@ export default function App() {
     const res = await syncAllFirestoreDataNow({
       uid: authUser.id,
       role: authUser.role,
-      pautanganEnabled: authUser.pautanganEnabled,
+      cashAssistanceEnabled: authUser.cashAssistanceEnabled,
+      ownedStoreIds: authUser.ownedStoreIds ?? [],
     });
 
     setItems(res.items);
+    setStores(res.stores);
+    if (res.platformConfig) setPlatformConfig(res.platformConfig);
+    setStoreApplications(res.storeApplications);
+    setCatalogTemplates(res.catalogTemplates);
+    setStoreCustomerCredits(res.storeCustomerCredits);
     setIsStoreLoading(false);
     if (res.storeConfig) {
       const { dueDays: syncedDueDays, ...rest } = res.storeConfig;
@@ -1319,9 +1688,9 @@ export default function App() {
         dueDaysRef.current = [Number(syncedDueDays[0]), Number(syncedDueDays[1])];
       }
     }
-    if (res.pautanganSettings) {
-      dueDaysRef.current = res.pautanganSettings.dueDays;
-      setPautanganSettings(res.pautanganSettings);
+    if (res.cashAssistanceSettings) {
+      dueDaysRef.current = res.cashAssistanceSettings.dueDays;
+      setCashAssistanceSettings(res.cashAssistanceSettings);
     }
     if (res.currentUser) setAuthUser(res.currentUser);
     if (res.users.length > 0) setUsers(res.users);
@@ -1386,6 +1755,7 @@ export default function App() {
       status: nextOrderStatus,
       deliveryStatus,
       cashCollected: cashCollected ?? target.cashCollected,
+      assignedRunnerId: target.assignedRunnerId || authUser?.id,
       assignedRunner: target.assignedRunner || actorName,
       deliveredAt: deliveryStatus === 'Delivered' ? stamp : target.deliveredAt,
       logs: nextLogs,
@@ -2101,7 +2471,7 @@ export default function App() {
 
   const handleRequestLoan = (principal: number, months: number) => {
     if (!currentUser) return;
-    const rate = pautanganSettings.monthlyInterestRate;
+    const rate = cashAssistanceSettings.monthlyInterestRate;
     const totalPayable = principal + Math.round(principal * (rate / 100) * months);
     const loanId = `LN-${Date.now().toString().slice(-6)}`;
     const todayIso = new Date().toISOString().slice(0, 10);
@@ -2110,11 +2480,14 @@ export default function App() {
       totalPayable,
       months,
       todayIso,
-      pautanganSettings.dueDays[1] ?? 30
+      cashAssistanceSettings.dueDays[1] ?? 30
     );
 
     const newLoan: LoanRecord = {
       id: loanId,
+      storeId: DEFAULT_STORE_ID,
+      storeName: DEFAULT_STORE_NAME,
+      storeOwnerId: DEFAULT_STORE_OWNER_ID,
       userId: currentUser.id,
       userName: currentUser.name,
       principal,
@@ -2145,17 +2518,23 @@ export default function App() {
     if (!targetLoan) return;
 
     if (payload.method !== 'Cash' && payload.proofImage) {
+      const loanStoreId = targetLoan.storeId || DEFAULT_STORE_ID;
+      const loanStoreName = targetLoan.storeName || DEFAULT_STORE_NAME;
+      const loanStoreOwnerId = targetLoan.storeOwnerId || DEFAULT_STORE_OWNER_ID;
       const newProof: PaymentProof = {
         id: `PRF-${Date.now().toString(36).toUpperCase()}-${Math.random()
           .toString(36)
           .slice(2, 5)
           .toUpperCase()}`,
+        storeId: loanStoreId,
+        storeName: loanStoreName,
+        storeOwnerId: loanStoreOwnerId,
         userId: currentUser.id,
         userName: currentUser.name,
         amount: payload.amount,
         channel: payload.method,
         referenceNo: payload.referenceNo || 'REF-LOAN',
-        purpose: 'Pautangan Repayment',
+        purpose: 'Cash Assistance Repayment',
         imageDataUrl: payload.proofImage,
         submittedAt: 'Just now',
         status: 'pending',
@@ -2223,17 +2602,29 @@ export default function App() {
   };
 
   const handleSubmitDebtProof = (payload: {
+    storeId: string;
+    storeName: string;
+    storeOwnerId?: string;
     amount: number;
     channel: string;
     referenceNo: string;
     imageDataUrl: string;
   }) => {
     if (!currentUser) return;
+    const storeId = payload.storeId || DEFAULT_STORE_ID;
+    const storeObj = stores.find((s) => s.id === storeId);
+    const storeName = payload.storeName || storeObj?.name || DEFAULT_STORE_NAME;
+    const storeOwnerId =
+      payload.storeOwnerId || storeObj?.ownerId || DEFAULT_STORE_OWNER_ID;
+
     const newProof: PaymentProof = {
       id: `PRF-${Date.now().toString(36).toUpperCase()}-${Math.random()
         .toString(36)
         .slice(2, 5)
         .toUpperCase()}`,
+      storeId,
+      storeName,
+      storeOwnerId,
       userId: currentUser.id,
       userName: currentUser.name,
       amount: payload.amount,
@@ -2248,12 +2639,16 @@ export default function App() {
     void savePaymentProof(newProof);
     void createNotificationDoc({
       id: `notif-prf-${Date.now()}`,
-      title: `New ${payload.channel} Payment Proof`,
-      body: `${currentUser.name} submitted ${formatPHP(payload.amount, true)} (${payload.referenceNo}).`,
+      title: `New ${storeName} ${payload.channel} Proof`.slice(0, 140),
+      body: `${currentUser.name} submitted ${formatPHP(payload.amount, true)} (${payload.referenceNo}) for ${storeName} Store Credit.`.slice(
+        0,
+        500
+      ),
       timestamp: 'Just now',
-      type: 'payment',
+      type: 'store',
       read: false,
-      targetUserId: 'admins',
+      targetUserId:
+        storeOwnerId && storeOwnerId !== currentUser.id ? storeOwnerId : 'admins',
     });
   };
 
@@ -2466,15 +2861,17 @@ export default function App() {
   };
 
   const handleReviewProof = (proofId: string, decision: 'approved' | 'rejected') => {
-    if (!isActualAdmin) return;
     const target = proofs.find((p) => p.id === proofId);
     if (!target || target.status !== 'pending') return;
     if (target.purpose === 'Community Seller Settlement') return;
+    if (!canManageStore(target.storeId, target.storeOwnerId)) return;
 
+    const actorName = currentUser?.name ?? 'Store Owner';
+    const todayIso = new Date().toISOString().slice(0, 10);
     const updatedProof: PaymentProof = {
       ...target,
       status: decision,
-      reviewedBy: currentUser?.name ?? 'Admin',
+      reviewedBy: actorName,
       reviewedAt: 'Just now',
     };
 
@@ -2483,15 +2880,21 @@ export default function App() {
 
     const isDebtPaymentProof =
       target.purpose === 'Store Debt Settlement' ||
-      target.purpose === 'Pautangan Repayment' ||
+      target.purpose === 'Cash Assistance Repayment' ||
       Boolean(target.loanId);
 
     if (decision === 'rejected') {
       if (isDebtPaymentProof) {
         void createNotificationDoc({
           id: `notif-rej-${Date.now()}`,
-          title: `${target.loanId ? 'Loan' : 'Debt'} Payment Proof Rejected (${target.referenceNo})`.slice(0, 140),
-          body: `Admin requested re-upload for ${target.userName}'s ${target.channel} debt payment (${formatPHP(target.amount, true)}).`.slice(0, 500),
+          title: `${target.loanId ? 'Cash Assistance' : 'Store Credit'} Payment Proof Rejected (${target.referenceNo})`.slice(
+            0,
+            140
+          ),
+          body: `${actorName} requested re-upload for ${target.userName}'s ${target.channel} payment (${formatPHP(target.amount, true)}).`.slice(
+            0,
+            500
+          ),
           timestamp: 'Just now',
           type: 'payment',
           read: false,
@@ -2502,15 +2905,53 @@ export default function App() {
     }
 
     if (target.purpose === 'Store Debt Settlement') {
+      const storeId = target.storeId || DEFAULT_STORE_ID;
+      const storeObj = stores.find((s) => s.id === storeId);
+      const storeName = target.storeName || storeObj?.name || DEFAULT_STORE_NAME;
+      const storeOwnerId =
+        target.storeOwnerId || storeObj?.ownerId || DEFAULT_STORE_OWNER_ID;
+      const creditId = `${storeId}__${target.userId}`;
+      const existingCredit = storeCustomerCredits.find((c) => c.id === creditId);
+      const prevBal = existingCredit?.balance ?? target.amount;
+      const nextBal = Math.max(0, prevBal - target.amount);
+      const appliedPay = Math.min(prevBal, target.amount);
+
+      const nextCredit: StoreCustomerCredit = {
+        id: creditId,
+        storeId,
+        storeName,
+        storeOwnerId,
+        userId: target.userId,
+        userName: target.userName,
+        balance: nextBal,
+        totalCharged: existingCredit?.totalCharged ?? prevBal,
+        totalPaid: (existingCredit?.totalPaid ?? 0) + appliedPay,
+        updatedAt: todayIso,
+      };
+      setStoreCustomerCredits((prev) => {
+        const exists = prev.some((c) => c.id === creditId);
+        return exists
+          ? prev.map((c) => (c.id === creditId ? nextCredit : c))
+          : [nextCredit, ...prev];
+      });
+      void saveStoreCustomerCredit(nextCredit);
+
       const targetUser = users.find((u) => u.id === target.userId);
       if (targetUser) {
+        const nextStoreBalances = {
+          ...(targetUser.storeDebtBalances ?? {}),
+          [storeId]: nextBal,
+        };
         const updatedUser: UserAccount = {
           ...targetUser,
           debtBalance: Math.max(0, targetUser.debtBalance - target.amount),
+          storeDebtBalances: nextStoreBalances,
         };
         setUsers((prev) => prev.map((u) => (u.id === updatedUser.id ? updatedUser : u)));
         if (authUser?.id === updatedUser.id) setAuthUser(updatedUser);
-        void saveUserAccount(updatedUser);
+        if (isActualAdmin || updatedUser.id === authUser?.id) {
+          void saveUserAccount(updatedUser);
+        }
       }
     }
 
@@ -2518,12 +2959,16 @@ export default function App() {
       const targetOrder = orders.find((o) => o.id === target.orderId);
       if (targetOrder) {
         if (isOrderPendingAdminConfirmation(targetOrder)) {
-          void approveOrderInternal(targetOrder.id, { skipProofId: proofId }).catch((err) => {
-            console.error('Failed to approve & release stock for order proof:', err);
-          });
+          void approveOrderInternal(targetOrder.id, { skipProofId: proofId }).catch(
+            (err) => {
+              console.error('Failed to approve & release stock for order proof:', err);
+            }
+          );
         } else {
           const updatedOrder: StoreOrder = { ...targetOrder, status: 'Confirmed' };
-          setOrders((prev) => prev.map((o) => (o.id === updatedOrder.id ? updatedOrder : o)));
+          setOrders((prev) =>
+            prev.map((o) => (o.id === updatedOrder.id ? updatedOrder : o))
+          );
           void saveOrder(updatedOrder);
         }
       }
@@ -2532,7 +2977,6 @@ export default function App() {
     if (target.loanId) {
       const targetLoan = loans.find((l) => l.id === target.loanId);
       if (targetLoan) {
-        const todayIso = new Date().toISOString().slice(0, 10);
         const rem = Math.max(0, targetLoan.remainingBalance - target.amount);
         let covered = target.amount;
         const nextInst = (targetLoan.installments ?? []).map((inst) => {
@@ -2571,8 +3015,14 @@ export default function App() {
     if (isDebtPaymentProof) {
       void createNotificationDoc({
         id: `notif-app-${Date.now()}`,
-        title: `${target.loanId ? 'Loan' : 'Debt'} Payment Approved (${target.referenceNo})`.slice(0, 140),
-        body: `${formatPHP(target.amount, true)} ${target.channel} payment on your debt was verified by ${currentUser?.name ?? 'Admin'}.`.slice(0, 500),
+        title: `${target.loanId ? 'Cash Assistance' : 'Store Credit'} Payment Approved (${target.referenceNo})`.slice(
+          0,
+          140
+        ),
+        body: `${formatPHP(target.amount, true)} ${target.channel} payment was verified by ${actorName}.`.slice(
+          0,
+          500
+        ),
         timestamp: 'Just now',
         type: 'payment',
         read: false,
@@ -2617,6 +3067,7 @@ export default function App() {
   };
 
   const handleCreateManualSale = async (payload: {
+    storeId?: string;
     customerMode: 'walkin' | 'coworker';
     customerId?: string;
     customerName: string;
@@ -2625,9 +3076,13 @@ export default function App() {
     deliveryNote?: string;
     paymentMethod: string;
   }): Promise<StoreOrder> => {
-    if (!isActualAdmin) {
-      throw new Error('Admin access required to create walk-in sales orders.');
+    const firstItem = items.find((i) => i.id === payload.items[0]?.itemId);
+    const storeId = payload.storeId || firstItem?.storeId || DEFAULT_STORE_ID;
+    const storeObj = stores.find((s) => s.id === storeId);
+    if (!canManageStore(storeId, storeObj?.ownerId)) {
+      throw new Error('Store Owner or Admin access required to create walk-in sales orders.');
     }
+
     const lineItems = payload.items
       .map((entry) => {
         const product = items.find((i) => i.id === entry.itemId);
@@ -2654,32 +3109,60 @@ export default function App() {
       }
     }
 
+    const deliveryEnabled = storeObj
+      ? storeObj.deliveryEnabled
+      : storeConfig.deliveryEnabled;
+    const storeDeliveryFee = storeObj
+      ? storeObj.deliveryFee
+      : storeConfig.deliveryFee;
+
     const subtotal = lineItems.reduce(
       (sum, entry) => sum + entry.quantity * entry.unitPrice,
       0
     );
     const deliveryFee =
-      payload.fulfillment === FulfillmentType.Delivery && storeConfig.deliveryEnabled
-        ? storeConfig.deliveryFee
+      payload.fulfillment === FulfillmentType.Delivery && deliveryEnabled
+        ? storeDeliveryFee
+        : 0;
+    const deliveryCommission =
+      deliveryFee > 0
+        ? Math.round((deliveryFee * (platformConfig.deliveryCommissionRate ?? 100)) / 100)
         : 0;
     const totalAmount = subtotal + deliveryFee;
 
     const targetCoworker =
       payload.customerMode === 'coworker' && payload.customerId
-        ? users.find((u) => u.id === payload.customerId)
+        ? users.find((u) => u.id === payload.customerId) ??
+          coworkerProfiles.find((c) => c.id === payload.customerId)
         : undefined;
 
     const customerId = targetCoworker ? targetCoworker.id : 'walk-in';
     const customerName =
       (targetCoworker ? targetCoworker.name : payload.customerName.trim()) ||
       'Walk-in Customer';
-    const isDebt = payload.paymentMethod === PaymentMethod.Debt && Boolean(targetCoworker);
-    const isCash = payload.paymentMethod === PaymentMethod.Cash;
+    const paymentType = resolveOrderPaymentType({
+      paymentMethod: payload.paymentMethod,
+    });
+    const isDebt = paymentType === 'credit' && Boolean(targetCoworker);
+    const isCash = paymentType === 'cash';
     const isPickup = payload.fulfillment === FulfillmentType.Pickup;
-    const defaultRunner = users.find((u) => u.role === UserRole.DeliveryStaff);
+    const assignedStaffIds = storeObj?.assignedDeliveryStaffIds ?? [];
+    const defaultRunner =
+      users.find((u) => assignedStaffIds.includes(u.id)) ??
+      users.find((u) => u.role === UserRole.DeliveryStaff);
+    const runnerId = assignedStaffIds[0] ?? defaultRunner?.id;
     const runnerName = isPickup
       ? 'Pick Up'
-      : defaultRunner?.name ?? 'Kuya Jun Reyes';
+      : users.find((u) => u.id === runnerId)?.name ??
+        defaultRunner?.name ??
+        'Kuya Jun Reyes';
+
+    const storeName = storeObj?.name || firstItem?.storeName || DEFAULT_STORE_NAME;
+    const storeOwnerId =
+      storeObj?.ownerId || firstItem?.storeOwnerId || DEFAULT_STORE_OWNER_ID;
+    const storeDueLabel = getNextDueDateLabel(
+      storeObj?.dueDays ?? cashAssistanceSettings.dueDays
+    );
 
     const orderId = `ORD-${Date.now().toString(36).toUpperCase()}-${Math.random()
       .toString(36)
@@ -2688,10 +3171,14 @@ export default function App() {
     const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const todayIso = new Date().toISOString().slice(0, 10);
     const nowLabel = `${todayIso} ${nowTime}`;
-    const actorName = currentUser?.name ?? 'Admin';
+    const actorName = currentUser?.name ?? 'Store Owner';
 
     const newOrder: StoreOrder = {
       id: orderId,
+      storeId,
+      storeName,
+      storeOwnerId,
+      assignedDeliveryStaffIds: assignedStaffIds,
       userId: customerId,
       userName: customerName,
       items: lineItems.map(({ itemId, name, quantity, unitPrice }) => ({
@@ -2700,27 +3187,31 @@ export default function App() {
         quantity,
         unitPrice,
       })),
+      subtotal,
       totalAmount,
       deliveryFee,
-      deliveryCommission: deliveryFee,
+      deliveryCommission,
       fulfillment: payload.fulfillment,
       deliveryNote: payload.deliveryNote?.trim() || undefined,
       paymentMethod: payload.paymentMethod,
+      paymentType,
       status: isPickup ? 'Completed' : 'Confirmed',
       deliveryStatus: isPickup ? 'Delivered' : 'Pending Dispatch',
-      assignedRunnerId: isPickup ? undefined : defaultRunner?.id,
+      assignedRunnerId: isPickup ? undefined : runnerId,
       assignedRunner: runnerName,
       cashCollected: isCash,
       createdAt: nowLabel,
       orderDateIso: todayIso,
       deliveredAt: isPickup ? nowLabel : undefined,
-      dueDateLabel: isDebt ? nextDueLabel : undefined,
+      dueDateLabel: isDebt ? storeDueLabel : undefined,
       source: 'store',
       logs: [
         {
           id: `lg-${Date.now()}-1`,
           timestamp: nowLabel,
-          event: `Manual walk-in sales order recorded via ${payload.paymentMethod} (${payload.fulfillment})`,
+          event: `Manual sales order recorded for ${storeName} via ${payload.paymentMethod} (${
+            isPickup ? 'Pick Up' : 'Delivery'
+          })`,
           actor: actorName,
         },
       ],
@@ -2729,6 +3220,7 @@ export default function App() {
     const previousOrders = orders;
     const previousItems = items;
     const previousUsers = users;
+    const previousCredits = storeCustomerCredits;
 
     setOrders((prev) => [newOrder, ...prev]);
     setItems((prev) =>
@@ -2743,24 +3235,72 @@ export default function App() {
       })
     );
 
-    const nextDebt = targetCoworker
-      ? isDebt
-        ? targetCoworker.debtBalance + totalAmount
-        : targetCoworker.debtBalance
-      : 0;
-    const nextSpent = targetCoworker ? targetCoworker.totalSpent + totalAmount : 0;
+    let nextStoreCredit: StoreCustomerCredit | null = null;
+    if (isDebt && targetCoworker) {
+      const creditId = `${storeId}__${targetCoworker.id}`;
+      const existingCredit = storeCustomerCredits.find((c) => c.id === creditId);
+      nextStoreCredit = {
+        id: creditId,
+        storeId,
+        storeName,
+        storeOwnerId,
+        userId: targetCoworker.id,
+        userName: targetCoworker.name,
+        balance: Math.max(0, (existingCredit?.balance ?? 0) + totalAmount),
+        totalCharged: Math.max(0, (existingCredit?.totalCharged ?? 0) + totalAmount),
+        totalPaid: existingCredit?.totalPaid ?? 0,
+        updatedAt: todayIso,
+      };
+      setStoreCustomerCredits((prev) => {
+        const exists = prev.some((c) => c.id === creditId);
+        return exists
+          ? prev.map((c) => (c.id === creditId ? nextStoreCredit! : c))
+          : [nextStoreCredit!, ...prev];
+      });
+    }
 
-    if (targetCoworker) {
+    const matchedUserRecord = targetCoworker
+      ? users.find((u) => u.id === targetCoworker.id)
+      : undefined;
+    const canWriteUserDoc = Boolean(
+      matchedUserRecord && (isActualAdmin || matchedUserRecord.id === authUser?.id)
+    );
+    const nextDebt = matchedUserRecord
+      ? isDebt
+        ? matchedUserRecord.debtBalance + totalAmount
+        : matchedUserRecord.debtBalance
+      : 0;
+    const nextSpent = matchedUserRecord ? matchedUserRecord.totalSpent + totalAmount : 0;
+    const nextStoreDebtMap = matchedUserRecord
+      ? {
+          ...(matchedUserRecord.storeDebtBalances ?? {}),
+          ...(nextStoreCredit ? { [storeId]: nextStoreCredit.balance } : {}),
+        }
+      : undefined;
+
+    if (matchedUserRecord) {
       setUsers((prev) =>
         prev.map((u) =>
-          u.id === targetCoworker.id
-            ? { ...u, debtBalance: nextDebt, totalSpent: nextSpent }
+          u.id === matchedUserRecord.id
+            ? {
+                ...u,
+                debtBalance: nextDebt,
+                totalSpent: nextSpent,
+                ...(nextStoreDebtMap ? { storeDebtBalances: nextStoreDebtMap } : {}),
+              }
             : u
         )
       );
-      if (authUser?.id === targetCoworker.id) {
+      if (authUser?.id === matchedUserRecord.id) {
         setAuthUser((prev) =>
-          prev ? { ...prev, debtBalance: nextDebt, totalSpent: nextSpent } : prev
+          prev
+            ? {
+                ...prev,
+                debtBalance: nextDebt,
+                totalSpent: nextSpent,
+                ...(nextStoreDebtMap ? { storeDebtBalances: nextStoreDebtMap } : {}),
+              }
+            : prev
         );
       }
     }
@@ -2776,14 +3316,23 @@ export default function App() {
           )
         )
       );
-      if (targetCoworker) {
-        await updateUserCheckoutTotals(targetCoworker.id, nextDebt, nextSpent);
+      if (nextStoreCredit) {
+        await saveStoreCustomerCredit(nextStoreCredit);
+      }
+      if (matchedUserRecord && canWriteUserDoc) {
+        await updateUserCheckoutTotals(
+          matchedUserRecord.id,
+          nextDebt,
+          nextSpent,
+          nextStoreDebtMap
+        );
       }
       return newOrder;
     } catch (err) {
       setOrders(previousOrders);
       setItems(previousItems);
       setUsers(previousUsers);
+      setStoreCustomerCredits(previousCredits);
       throw err;
     }
   };
@@ -2796,12 +3345,12 @@ export default function App() {
     note?: string;
   }): Promise<StockAdjustmentLog> => {
     const actorId = authUser?.id ?? currentUser?.id;
-    if (!actorId || !isActualAdmin) {
-      throw new Error('Sign in with an Admin account to record stock adjustments.');
-    }
     const target = items.find((i) => i.id === payload.itemId);
     if (!target) {
       throw new Error('Selected item was not found.');
+    }
+    if (!actorId || !canManageStore(target.storeId, target.storeOwnerId)) {
+      throw new Error('Store Owner or Admin access required to record stock adjustments.');
     }
 
     const previousStock = target.stock;
@@ -2835,8 +3384,19 @@ export default function App() {
       minute: '2-digit',
     });
 
+    const storeId = target.storeId || DEFAULT_STORE_ID;
+    const storeName =
+      target.storeName || stores.find((s) => s.id === storeId)?.name || DEFAULT_STORE_NAME;
+    const storeOwnerId =
+      target.storeOwnerId ||
+      stores.find((s) => s.id === storeId)?.ownerId ||
+      DEFAULT_STORE_OWNER_ID;
+
     const logEntry: StockAdjustmentLog = {
       id: `adj-${nowMs}-${Math.random().toString(36).slice(2, 6)}`,
+      storeId,
+      storeName,
+      storeOwnerId,
       itemId: target.id,
       itemName: target.name.slice(0, 140),
       itemCategory: target.category.slice(0, 80),
@@ -2849,7 +3409,7 @@ export default function App() {
       newStock,
       unitCostAtTime: target.costPrice,
       adjustedById: actorId,
-      adjustedByName: (authUser?.name ?? currentUser?.name ?? 'Admin').slice(0, 120),
+      adjustedByName: (authUser?.name ?? currentUser?.name ?? 'Store Owner').slice(0, 120),
       createdAt: `${todayIso} ${nowTime}`,
       createdAtMs: nowMs,
     };
@@ -3604,6 +4164,21 @@ export default function App() {
     badge?: number;
   }[] = [
     { id: 'store', label: 'Storefront', icon: Store },
+    ...(isStoreOwnerUser
+      ? [
+          {
+            id: 'storeOwner' as ActiveSection,
+            label: 'My Store',
+            icon: ShoppingBag,
+            badge: orders.filter(
+              (o) =>
+                o.source === 'store' &&
+                isOrderPendingAdminConfirmation(o) &&
+                (isAdminOrSuper || o.storeOwnerId === currentUser?.id)
+            ).length,
+          },
+        ]
+      : []),
     {
       id: 'ewallet',
       label: 'Buy/Sell E-Wallet',
@@ -3629,8 +4204,8 @@ export default function App() {
           },
         ]
       : []),
-    ...(canViewPautanganNav
-      ? [{ id: 'pautangan' as ActiveSection, label: 'Pautangan', icon: HandCoins }]
+    ...(canViewCashAssistanceNav
+      ? [{ id: 'cashAssistance' as ActiveSection, label: 'Cash Assistance', icon: HandCoins }]
       : []),
     { id: 'ledger', label: 'My Ledger', icon: LayoutDashboard },
     ...(canViewDeliveryNav
@@ -3657,6 +4232,9 @@ export default function App() {
             id: 'developer' as ActiveSection,
             label: 'Developer Settings',
             icon: Terminal,
+            badge:
+              storeApplications.filter((a) => a.status === 'pending').length +
+              storeCashAssistance.filter((c) => c.status === 'pending_approval').length,
           },
         ]
       : []),
@@ -3879,6 +4457,20 @@ export default function App() {
 
   const topNavLinks = [
     { id: 'store', label: 'Store', badge: 0 },
+    ...(isStoreOwnerUser
+      ? [
+          {
+            id: 'storeOwner',
+            label: 'My Store',
+            badge: orders.filter(
+              (o) =>
+                o.source === 'store' &&
+                isOrderPendingAdminConfirmation(o) &&
+                (isAdminOrSuper || o.storeOwnerId === currentUser?.id)
+            ).length,
+          },
+        ]
+      : []),
     ...(isAdminOrSuper
       ? [{ id: 'salesOrderShortcut', label: 'Sales Order', badge: pendingOrdersCount }]
       : []),
@@ -3887,7 +4479,9 @@ export default function App() {
     ...(currentUser && currentRole !== UserRole.Guest
       ? [{ id: 'seller', label: 'Seller Hub', badge: sellerDebtSummary.unpaidCount }]
       : []),
-    ...(canViewPautanganNav ? [{ id: 'pautangan', label: 'Pautangan', badge: 0 }] : []),
+    ...(canViewCashAssistanceNav
+      ? [{ id: 'cashAssistance', label: 'Cash Assistance', badge: 0 }]
+      : []),
     ...(canViewDeliveryNav
       ? [{ id: 'delivery', label: 'Delivery', badge: pendingDeliveriesCount }]
       : []),
@@ -4281,6 +4875,24 @@ export default function App() {
                               handleMarkNotificationRead(n);
                               if (n.type === 'delivery') {
                                 navigateTo(canViewDeliveryNav ? 'delivery' : 'ledger');
+                              } else if (n.type === 'store') {
+                                if (isStoreOwnerUser) {
+                                  navigateTo('storeOwner');
+                                } else if (isAdminOrSuper) {
+                                  navigateTo('developer');
+                                } else {
+                                  navigateTo('store');
+                                }
+                              } else if (n.type === 'cash_assistance') {
+                                if (isAdminOrSuper) {
+                                  navigateTo('developer');
+                                } else if (isStoreOwnerUser) {
+                                  navigateTo('storeOwner');
+                                } else if (canViewCashAssistanceNav) {
+                                  navigateTo('cashAssistance');
+                                } else {
+                                  navigateTo('ledger');
+                                }
                               } else if (n.type === 'payment') {
                                 if (n.targetUserId === 'admins' && isAdminOrSuper) {
                                   if (n.title.toLowerCase().includes('awaiting confirmation')) {
@@ -4289,6 +4901,8 @@ export default function App() {
                                     setRequestedAdminSubTab({ tab: 'proofs', nonce: Date.now() });
                                   }
                                   navigateTo('admin');
+                                } else if (isStoreOwnerUser && n.title.toLowerCase().includes('store')) {
+                                  navigateTo('storeOwner');
                                 } else {
                                   navigateTo('ledger');
                                 }
@@ -4402,9 +5016,15 @@ export default function App() {
               cart={cart}
               currentUser={currentUser}
               currentRole={currentRole}
-              dueDays={pautanganSettings.dueDays}
+              dueDays={cashAssistanceSettings.dueDays}
               nextDueLabel={nextDueLabel}
               storeConfig={storeConfig}
+              stores={stores}
+              storeApplications={storeApplications}
+              platformConfig={platformConfig}
+              storeCustomerCredits={storeCustomerCredits}
+              orders={orders}
+              onSubmitStoreApplication={handleSubmitStoreApplication}
               onAddToCart={handleAddToCart}
               onUpdateCartQty={handleUpdateCartQty}
               onClearCart={() => setCart([])}
@@ -4413,8 +5033,368 @@ export default function App() {
               onOpenSalesOrder={isAdminOrSuper ? openSalesOrderTab : undefined}
               pendingOrdersCount={pendingOrdersCount}
               onPlaceOrder={handlePlaceOrder}
+              onPlaceSplitOrder={handlePlaceSplitOrder}
               isCartOpen={isCartOpen}
               setIsCartOpen={setIsCartOpen}
+            />
+          )}
+
+          {activeSection === 'storeOwner' && isStoreOwnerUser && (
+            <StoreOwnerWorkspaceView
+              currentUser={currentUser}
+              currentRole={currentRole}
+              stores={stores}
+              items={items}
+              orders={orders}
+              proofs={proofs}
+              loans={loans}
+              users={users}
+              coworkers={allRegisteredCoworkers}
+              catalogTemplates={catalogTemplates}
+              storeCashAssistance={storeCashAssistance}
+              storeCustomerCredits={storeCustomerCredits}
+              stockAdjustments={stockAdjustments}
+              platformConfig={platformConfig}
+              requestedStoreId={requestedStoreWorkspace}
+              onUpdateStoreProfile={async (nextStore) => {
+                setStores((prev) =>
+                  prev.map((s) => (s.id === nextStore.id ? nextStore : s))
+                );
+                await saveStoreProfile(nextStore);
+                if (nextStore.id === DEFAULT_STORE_ID) {
+                  const nextStoreCfg: StoreConfig = {
+                    storeAnnouncement: nextStore.storeAnnouncement,
+                    deliveryEnabled: nextStore.deliveryEnabled,
+                    deliveryFee: nextStore.deliveryFee,
+                    walletAccountName: nextStore.walletAccountName,
+                    walletAccountNumber: nextStore.walletAccountNumber,
+                    categories: nextStore.categories,
+                    paymentMethods: nextStore.paymentMethods,
+                  };
+                  setStoreConfig(nextStoreCfg);
+                  await saveStoreConfig(nextStoreCfg, nextStore.dueDays);
+                }
+              }}
+              onAddStoreItem={async (store, item) => {
+                const todayIso = new Date().toISOString().slice(0, 10);
+                const cleanBarcode = item.barcode?.trim().slice(0, 64) || undefined;
+                const templateId = item.templateId || `tpl-${Date.now().toString(36)}`;
+                const newItem: StoreItem = {
+                  id: `item-${Date.now().toString(36)}`,
+                  storeId: store.id,
+                  storeName: store.name,
+                  storeOwnerId: store.ownerId,
+                  templateId,
+                  name: item.name,
+                  category: item.category,
+                  description: item.description,
+                  price: item.price,
+                  costPrice: item.costPrice,
+                  stock: item.stock,
+                  soldCount: 0,
+                  image: item.image,
+                  barcode: cleanBarcode,
+                  costHistory: [
+                    {
+                      id: `ch-${Date.now()}`,
+                      date: todayIso,
+                      costPrice: item.costPrice,
+                      sellingPrice: item.price,
+                      note: `Initial item registration (${store.name})`,
+                      updatedBy: currentUser?.name ?? store.ownerName,
+                    },
+                  ],
+                };
+                const newTpl: CatalogTemplate = {
+                  id: templateId,
+                  name: item.name,
+                  category: item.category,
+                  description: item.description,
+                  suggestedPrice: item.price,
+                  image: item.image,
+                  barcode: cleanBarcode,
+                  createdByStoreId: store.id,
+                  createdByStoreName: store.name,
+                  createdByUserId: currentUser?.id ?? store.ownerId,
+                  createdAt: todayIso,
+                };
+                setItems((prev) => [...prev, newItem]);
+                setCatalogTemplates((prev) =>
+                  prev.some((t) => t.id === templateId) ? prev : [newTpl, ...prev]
+                );
+                await saveStoreItem(newItem);
+                if (!item.templateId) {
+                  await saveCatalogTemplate(newTpl);
+                }
+              }}
+              onAdoptCatalogTemplate={async (store, template, payload) => {
+                const todayIso = new Date().toISOString().slice(0, 10);
+                const newItem: StoreItem = {
+                  id: `item-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`,
+                  storeId: store.id,
+                  storeName: store.name,
+                  storeOwnerId: store.ownerId,
+                  templateId: template.id,
+                  name: template.name,
+                  category: template.category,
+                  description: `${template.description} (Stocked by ${store.name})`.slice(0, 600),
+                  price: payload.price,
+                  costPrice: payload.costPrice,
+                  stock: payload.stock,
+                  soldCount: 0,
+                  image: template.image,
+                  barcode: template.barcode,
+                  costHistory: [
+                    {
+                      id: `ch-${Date.now()}`,
+                      date: todayIso,
+                      costPrice: payload.costPrice,
+                      sellingPrice: payload.price,
+                      note: `Adopted shared catalog item (${template.createdByStoreName} -> ${store.name})`,
+                      updatedBy: currentUser?.name ?? store.ownerName,
+                    },
+                  ],
+                };
+                setItems((prev) => [...prev, newItem]);
+                await saveStoreItem(newItem);
+              }}
+              onUpdateItemPricing={(itemId, sellingPrice, costPrice, note) => {
+                const target = items.find((i) => i.id === itemId);
+                if (!target) return;
+                const updated: StoreItem = {
+                  ...target,
+                  price: sellingPrice,
+                  costPrice,
+                  costHistory: [
+                    ...(target.costHistory ?? []),
+                    {
+                      id: `ch-${Date.now()}`,
+                      date: new Date().toISOString().slice(0, 10),
+                      costPrice,
+                      sellingPrice,
+                      note: note || 'Price / cost update',
+                      updatedBy: currentUser?.name ?? 'Store Owner',
+                    },
+                  ],
+                };
+                setItems((prev) => prev.map((i) => (i.id === itemId ? updated : i)));
+                void saveStoreItem(updated);
+              }}
+              onDeleteItem={async (itemId) => {
+                const prevItems = items;
+                setItems((prev) => prev.filter((i) => i.id !== itemId));
+                setCart((prev) => prev.filter((c) => c.itemId !== itemId));
+                try {
+                  await removeStoreItem(itemId);
+                } catch (err) {
+                  setItems(prevItems);
+                  throw err;
+                }
+              }}
+              onRestockItem={async (itemId, amount, options) => {
+                const target = items.find((i) => i.id === itemId);
+                if (!target) return;
+                const previousItems = items;
+                const previousLogs = stockAdjustments;
+                const todayIso = new Date().toISOString().slice(0, 10);
+                const nextCost =
+                  options?.unitCost !== undefined && options.unitCost >= 0
+                    ? options.unitCost
+                    : target.costPrice;
+                const nextSell =
+                  options?.sellingPrice !== undefined && options.sellingPrice >= 1
+                    ? options.sellingPrice
+                    : target.price;
+                const costOrPriceChanged =
+                  nextCost !== target.costPrice ||
+                  nextSell !== target.price ||
+                  Boolean(options?.note?.trim());
+                const nextBarcode =
+                  options?.barcode !== undefined
+                    ? options.barcode.trim().slice(0, 64) || undefined
+                    : target.barcode;
+                const updated: StoreItem = {
+                  ...target,
+                  stock: Math.max(0, target.stock + amount),
+                  costPrice: nextCost,
+                  price: nextSell,
+                  barcode: nextBarcode,
+                  costHistory: costOrPriceChanged
+                    ? [
+                        ...(target.costHistory ?? []),
+                        {
+                          id: `ch-${Date.now()}`,
+                          date: todayIso,
+                          costPrice: nextCost,
+                          sellingPrice: nextSell,
+                          note:
+                            options?.note?.trim() ||
+                            `Restocked +${amount} units${
+                              nextCost !== target.costPrice ? ' (updated unit cost)' : ''
+                            }`,
+                          updatedBy: currentUser?.name ?? 'Store Owner',
+                        },
+                      ]
+                    : target.costHistory,
+                };
+                const actorId = authUser?.id ?? currentUser?.id;
+                const nowMs = Date.now();
+                const nowTime = new Date(nowMs).toLocaleTimeString([], {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                });
+                const restockLog: StockAdjustmentLog | null = actorId
+                  ? {
+                      id: `adj-${nowMs}-${Math.random().toString(36).slice(2, 6)}`,
+                      storeId: target.storeId || DEFAULT_STORE_ID,
+                      storeName: target.storeName || DEFAULT_STORE_NAME,
+                      storeOwnerId: target.storeOwnerId || DEFAULT_STORE_OWNER_ID,
+                      itemId: target.id,
+                      itemName: target.name.slice(0, 140),
+                      itemCategory: target.category.slice(0, 80),
+                      barcode: updated.barcode?.slice(0, 64) || undefined,
+                      adjustmentType: 'restock',
+                      reason: 'Supplier Restock',
+                      note: options?.note?.trim().slice(0, 400) || undefined,
+                      previousStock: target.stock,
+                      delta: updated.stock - target.stock,
+                      newStock: updated.stock,
+                      unitCostAtTime: nextCost,
+                      adjustedById: actorId,
+                      adjustedByName: (authUser?.name ?? currentUser?.name ?? 'Store Owner').slice(0, 120),
+                      createdAt: `${todayIso} ${nowTime}`,
+                      createdAtMs: nowMs,
+                    }
+                  : null;
+                setItems((prev) => prev.map((i) => (i.id === itemId ? updated : i)));
+                if (restockLog) {
+                  setStockAdjustments((prev) => [restockLog, ...prev]);
+                }
+                try {
+                  if (restockLog) {
+                    await recordStockAdjustment(updated, restockLog);
+                  } else {
+                    await saveStoreItem(updated);
+                  }
+                } catch (err) {
+                  setItems(previousItems);
+                  setStockAdjustments(previousLogs);
+                  throw err;
+                }
+              }}
+              onUpdateItemBarcode={async (itemId, barcode) => {
+                const target = items.find((i) => i.id === itemId);
+                if (!target) return;
+                const cleanBarcode = barcode.trim().slice(0, 64);
+                const updated: StoreItem = {
+                  ...target,
+                  barcode: cleanBarcode || undefined,
+                };
+                setItems((prev) => prev.map((i) => (i.id === itemId ? updated : i)));
+                await saveStoreItem(updated);
+              }}
+              onAdjustStock={handleAdjustStock}
+              onApproveOrder={handleApprovePendingOrder}
+              onRejectOrder={handleRejectPendingOrder}
+              onCreateManualSale={handleCreateManualSale}
+              onReviewProof={handleReviewProof}
+              onSendStoreDebtReminders={async (store, credits) => {
+                const storeDue = getNextDueDateLabel(store.dueDays);
+                const nowMs = Date.now();
+                await Promise.all(
+                  credits.map((c, idx) =>
+                    createNotificationDoc({
+                      id: `notif-rem-${nowMs}-${idx}-${Math.random().toString(36).slice(2, 5)}`,
+                      title: `${store.name} Cutoff Reminder (${storeDue})`.slice(0, 140),
+                      body: `Friendly reminder: you have a ${formatPHP(c.balance, true)} store credit balance with ${store.name} due by ${storeDue}.`.slice(
+                        0,
+                        500
+                      ),
+                      timestamp: 'Just now',
+                      type: 'reminder',
+                      read: false,
+                      targetUserId: c.userId,
+                    })
+                  )
+                );
+              }}
+              onRequestStoreCashAssistance={async (storeId, note) => {
+                const cfg = storeCashAssistance.find((c) => c.storeId === storeId);
+                if (!cfg) return;
+                const nowIso = new Date().toISOString().slice(0, 10);
+                setStoreCashAssistance((prev) =>
+                  prev.map((c) =>
+                    c.storeId === storeId
+                      ? { ...c, status: 'pending_approval', requestedAt: nowIso, requestNote: note }
+                      : c
+                  )
+                );
+                await requestStoreCashAssistanceAddon(storeId, note);
+                await createNotificationDoc({
+                  id: `notif-ca-req-${Date.now()}`,
+                  title: `Cash Assistance Add-On Request · ${cfg.storeName}`.slice(0, 140),
+                  body: `${currentUser?.name ?? 'Store Owner'} requested to enable the Cash Assistance add-on for ${cfg.storeName}. Approve in Developer Settings.`.slice(
+                    0,
+                    500
+                  ),
+                  timestamp: 'Just now',
+                  type: 'cash_assistance',
+                  read: false,
+                  targetUserId: 'super_admin',
+                });
+              }}
+              onIssueStoreLoan={async (store, borrowerId, borrowerName, principal, months) => {
+                const cfg = storeCashAssistance.find((c) => c.storeId === store.id);
+                const rate = cfg?.monthlyInterestRate ?? cashAssistanceSettings.monthlyInterestRate;
+                const totalPayable = principal + Math.round(principal * (rate / 100) * months);
+                const loanId = `LN-${Date.now().toString().slice(-6)}`;
+                const todayIso = new Date().toISOString().slice(0, 10);
+                const installments = buildLoanInstallments(
+                  loanId,
+                  totalPayable,
+                  months,
+                  todayIso,
+                  store.dueDays?.[1] ?? 30
+                );
+                const newLoan: LoanRecord = {
+                  id: loanId,
+                  storeId: store.id,
+                  storeName: store.name,
+                  storeOwnerId: store.ownerId,
+                  userId: borrowerId,
+                  userName: borrowerName,
+                  principal,
+                  interestRate: rate,
+                  months,
+                  totalPayable,
+                  remainingBalance: totalPayable,
+                  status: 'Active',
+                  createdAt: todayIso,
+                  nextDueDate: installments[0]?.dueDate ?? nextDueLabel,
+                  repayments: [],
+                  installments,
+                };
+                setLoans((prev) => [newLoan, ...prev]);
+                await saveLoanRecord(newLoan);
+              }}
+              onMarkStoreLoanSettled={async (loanId) => {
+                const target = loans.find((l) => l.id === loanId);
+                if (!target) return;
+                const todayIso = new Date().toISOString().slice(0, 10);
+                const settled: LoanRecord = {
+                  ...target,
+                  remainingBalance: 0,
+                  status: 'Settled',
+                  installments: (target.installments ?? []).map((i) => ({
+                    ...i,
+                    status: 'Paid',
+                    paidAt: i.paidAt || todayIso,
+                  })),
+                };
+                setLoans((prev) => prev.map((l) => (l.id === loanId ? settled : l)));
+                await saveLoanRecord(settled);
+              }}
+              onOpenStorefrontApply={() => navigateTo('store')}
             />
           )}
 
@@ -4483,17 +5463,38 @@ export default function App() {
             />
           )}
 
-          {activeSection === 'pautangan' && canViewPautanganNav && (
-            <PautanganView
-              settings={pautanganSettings}
+          {activeSection === 'cashAssistance' && canViewCashAssistanceNav && (
+            <CashAssistanceView
+              settings={cashAssistanceSettings}
+              platformConfig={platformConfig}
               loans={loans}
               paymentMethods={storeConfig.paymentMethods}
+              storeCashAssistance={storeCashAssistance}
               currentUser={currentUser}
               currentRole={currentRole}
               onOpenSignIn={() => setIsSignInOpen(true)}
               onOpenLedger={() => navigateTo('ledger')}
+              onOpenStoreWorkspace={(storeId) => {
+                setRequestedStoreWorkspace({
+                  storeId,
+                  tab: 'cashAssistance',
+                  nonce: Date.now(),
+                });
+                navigateTo('storeOwner');
+              }}
               onRequestLoan={handleRequestLoan}
               onRepayLoan={handleRepayLoan}
+              onRequestStoreCashAssistance={async (storeId, note) => {
+                const nowIso = new Date().toISOString().slice(0, 10);
+                setStoreCashAssistance((prev) =>
+                  prev.map((c) =>
+                    c.storeId === storeId
+                      ? { ...c, status: 'pending_approval', requestedAt: nowIso, requestNote: note }
+                      : c
+                  )
+                );
+                await requestStoreCashAssistanceAddon(storeId, note);
+              }}
             />
           )}
 
@@ -4507,8 +5508,10 @@ export default function App() {
               loans={loans}
               proofs={proofs}
               paymentMethods={storeConfig.paymentMethods}
+              stores={stores}
+              storeCustomerCredits={storeCustomerCredits}
               ownerTotalCommission={ownerCommissionEarned}
-              dueDays={pautanganSettings.dueDays}
+              dueDays={cashAssistanceSettings.dueDays}
               nextDueLabel={nextDueLabel}
               onOpenSignIn={() => setIsSignInOpen(true)}
               onSubmitDebtProof={handleSubmitDebtProof}
@@ -4520,6 +5523,8 @@ export default function App() {
           {activeSection === 'delivery' && canViewDeliveryNav && (
             <DeliveryStaffView
               orders={orders}
+              stores={stores}
+              platformConfig={platformConfig}
               currentUser={currentUser}
               currentRole={currentRole}
               onUpdateDeliveryStatus={handleUpdateDeliveryStatus}
@@ -4537,8 +5542,9 @@ export default function App() {
               proofs={storeProofs}
               listings={listings}
               loans={loans}
-              pautanganSettings={pautanganSettings}
+              cashAssistanceSettings={cashAssistanceSettings}
               storeConfig={storeConfig}
+              stores={stores}
               ownerTotalCommission={ownerCommissionEarned}
               onReviewProof={handleReviewProof}
               onReviewListing={handleReviewListing}
@@ -4546,35 +5552,35 @@ export default function App() {
               onUpdateDueDays={(d1, d2) => {
                 const nextDays: [number, number] = [d1, d2];
                 dueDaysRef.current = nextDays;
-                const nextSettings = { ...pautanganSettings, dueDays: nextDays };
-                setPautanganSettings(nextSettings);
-                void savePautanganSettings(nextSettings);
+                const nextSettings = { ...cashAssistanceSettings, dueDays: nextDays };
+                setCashAssistanceSettings(nextSettings);
+                void saveCashAssistanceSettings(nextSettings);
               }}
               onSendReminders={handleSendReminders}
-              onUpdatePautanganGlobal={(enabled, rate) => {
+              onUpdateCashAssistanceGlobal={(enabled, rate) => {
                 const nextSettings = {
-                  ...pautanganSettings,
+                  ...cashAssistanceSettings,
                   globalEnabled: enabled,
                   monthlyInterestRate: rate,
                 };
-                setPautanganSettings(nextSettings);
-                void savePautanganSettings(nextSettings);
+                setCashAssistanceSettings(nextSettings);
+                void saveCashAssistanceSettings(nextSettings);
               }}
-              onUpdatePautanganTerms={(terms) => {
+              onUpdateCashAssistanceTerms={(terms) => {
                 const nextSettings = {
-                  ...pautanganSettings,
+                  ...cashAssistanceSettings,
                   availableTerms: terms,
                 };
-                setPautanganSettings(nextSettings);
-                void savePautanganSettings(nextSettings);
+                setCashAssistanceSettings(nextSettings);
+                void saveCashAssistanceSettings(nextSettings);
               }}
-              onToggleUserPautangan={(userId, enabled, limit) => {
+              onToggleUserCashAssistance={(userId, enabled, limit) => {
                 const target = users.find((u) => u.id === userId);
                 if (!target) return;
                 const updated: UserAccount = {
                   ...target,
-                  pautanganEnabled: enabled,
-                  pautanganLimit: limit,
+                  cashAssistanceEnabled: enabled,
+                  cashAssistanceLimit: limit,
                 };
                 setUsers((prev) => prev.map((u) => (u.id === userId ? updated : u)));
                 if (authUser?.id === userId) setAuthUser(updated);
@@ -4604,8 +5610,8 @@ export default function App() {
                   department,
                   role: UserRole.DeliveryStaff,
                   debtBalance: 0,
-                  pautanganEnabled: true,
-                  pautanganLimit: 3000,
+                  cashAssistanceEnabled: true,
+                  cashAssistanceLimit: 3000,
                   avatarInitials: initials || 'DS',
                   totalSpent: 0,
                 };
@@ -4722,6 +5728,9 @@ export default function App() {
                 const restockLog: StockAdjustmentLog | null = actorId
                   ? {
                       id: `adj-${nowMs}-${Math.random().toString(36).slice(2, 6)}`,
+                      storeId: target.storeId || DEFAULT_STORE_ID,
+                      storeName: target.storeName || DEFAULT_STORE_NAME,
+                      storeOwnerId: target.storeOwnerId || DEFAULT_STORE_OWNER_ID,
                       itemId: target.id,
                       itemName: target.name.slice(0, 140),
                       itemCategory: target.category.slice(0, 80),
@@ -4813,6 +5822,9 @@ export default function App() {
                 const cleanBarcode = item.barcode?.trim().slice(0, 64) || undefined;
                 const newItem: StoreItem = {
                   ...item,
+                  storeId: DEFAULT_STORE_ID,
+                  storeName: DEFAULT_STORE_NAME,
+                  storeOwnerId: DEFAULT_STORE_OWNER_ID,
                   barcode: cleanBarcode,
                   id: `item-${Date.now()}`,
                   soldCount: 0,
@@ -4856,6 +5868,212 @@ export default function App() {
               ewalletPosts={ewalletPosts}
               apps={otherApps}
               storeConfig={storeConfig}
+              platformConfig={platformConfig}
+              stores={stores}
+              storeCashAssistance={storeCashAssistance}
+              storeApplications={storeApplications}
+              users={users}
+              onSavePlatformConfig={async (nextCfg) => {
+                if (!isActualSuperAdmin) return;
+                setPlatformConfig(nextCfg);
+                await savePlatformConfig(nextCfg);
+              }}
+              onApproveStoreApplication={async (appId) => {
+                if (!isActualAdmin) return;
+                const app = storeApplications.find((a) => a.id === appId);
+                if (!app || app.status !== 'pending') return;
+                const todayIso = new Date().toISOString().slice(0, 10);
+                const storeId = `store-${Date.now().toString(36)}`;
+                const applicant = users.find((u) => u.id === app.applicantId);
+                const actorName = currentUser?.name ?? 'Super Admin';
+                const newStore: StoreProfile = {
+                  id: storeId,
+                  name: app.storeName,
+                  description: app.description,
+                  ownerId: app.applicantId,
+                  ownerName: app.applicantName,
+                  status: 'active',
+                  subscriptionStatus: 'active',
+                  monthlyFee: app.quotedBaseFee || platformConfig.baseStoreMonthlyFee,
+                  cashAssistanceActive: false,
+                  assignedDeliveryStaffIds: [],
+                  storeAnnouncement: `Welcome to ${app.storeName}! Check stock and payment options below.`,
+                  deliveryEnabled: true,
+                  deliveryFee: platformConfig.defaultDeliveryFee ?? 15,
+                  walletAccountName: app.applicantName,
+                  walletAccountNumber: '',
+                  dueDays: platformConfig.defaultDueDays ?? [15, 30],
+                  categories: [...storeConfig.categories],
+                  paymentMethods: DEFAULT_PAYMENT_METHODS.map((pm) => ({
+                    ...pm,
+                    accountName: pm.type === 'digital' ? app.applicantName : pm.accountName,
+                  })),
+                  createdAt: todayIso,
+                };
+                const newCa: StoreCashAssistanceConfig = {
+                  storeId,
+                  storeName: app.storeName,
+                  storeOwnerId: app.applicantId,
+                  status: 'locked',
+                  visibleToOwner: false,
+                  monthlyFee: platformConfig.cashAssistanceMonthlyFee,
+                  monthlyInterestRate: cashAssistanceSettings.monthlyInterestRate,
+                  dueDays: platformConfig.defaultDueDays ?? [15, 30],
+                  availableTerms: cashAssistanceSettings.availableTerms,
+                };
+                const applicantOwned = applicant?.ownedStoreIds ?? [];
+                await approveStoreApplicationAndProvisionStore({
+                  application: app,
+                  store: newStore,
+                  storeCashAssistance: newCa,
+                  applicantOwnedStoreIds: applicantOwned,
+                  reviewedBy: actorName,
+                });
+                setStoreApplications((prev) =>
+                  prev.map((a) =>
+                    a.id === appId
+                      ? { ...a, status: 'approved', provisionedStoreId: storeId, reviewedBy: actorName, reviewedAt: todayIso }
+                      : a
+                  )
+                );
+                setStores((prev) => [...prev, newStore]);
+                setStoreCashAssistance((prev) => [...prev, newCa]);
+                setUsers((prev) =>
+                  prev.map((u) =>
+                    u.id === app.applicantId
+                      ? {
+                          ...u,
+                          ownedStoreIds: Array.from(new Set([...(u.ownedStoreIds ?? []), storeId])),
+                        }
+                      : u
+                  )
+                );
+                if (authUser?.id === app.applicantId) {
+                  setAuthUser((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          ownedStoreIds: Array.from(new Set([...(prev.ownedStoreIds ?? []), storeId])),
+                        }
+                      : prev
+                  );
+                }
+                void createNotificationDoc({
+                  id: `notif-storeapp-ok-${Date.now()}`,
+                  title: `Store Approved · ${app.storeName}`.slice(0, 140),
+                  body: `Your store "${app.storeName}" is now active! Open "My Store" in the navigation bar to add items or adopt shared catalog listings.`,
+                  timestamp: 'Just now',
+                  type: 'store',
+                  read: false,
+                  targetUserId: app.applicantId,
+                });
+              }}
+              onRejectStoreApplication={async (appId) => {
+                if (!isActualAdmin) return;
+                const app = storeApplications.find((a) => a.id === appId);
+                if (!app) return;
+                const actorName = currentUser?.name ?? 'Super Admin';
+                await rejectStoreApplication(appId, actorName);
+                setStoreApplications((prev) =>
+                  prev.map((a) =>
+                    a.id === appId ? { ...a, status: 'rejected', reviewedBy: actorName } : a
+                  )
+                );
+                void createNotificationDoc({
+                  id: `notif-storeapp-rej-${Date.now()}`,
+                  title: `Store Application Declined · ${app.storeName}`.slice(0, 140),
+                  body: `Your application for "${app.storeName}" was declined by ${actorName}.`,
+                  timestamp: 'Just now',
+                  type: 'store',
+                  read: false,
+                  targetUserId: app.applicantId,
+                });
+              }}
+              onUpdateStoreSubscriptionStatus={async (storeId, status: StoreSubscriptionStatus) => {
+                if (!isActualAdmin) return;
+                const target = stores.find((s) => s.id === storeId);
+                if (!target) return;
+                const updated: StoreProfile = {
+                  ...target,
+                  status,
+                  subscriptionStatus: status,
+                };
+                setStores((prev) => prev.map((s) => (s.id === storeId ? updated : s)));
+                await saveStoreProfile(updated);
+              }}
+              onToggleStoreCashAssistanceVisibility={async (storeId, visible) => {
+                if (!isActualAdmin) return;
+                setStoreCashAssistance((prev) =>
+                  prev.map((c) =>
+                    c.storeId === storeId ? { ...c, visibleToOwner: visible } : c
+                  )
+                );
+                await toggleStoreCashAssistanceVisibility(storeId, visible);
+              }}
+              onReviewStoreCashAssistance={async (storeId, status: CashAssistanceSubscriptionStatus) => {
+                if (!isActualAdmin) return;
+                const actorName = currentUser?.name ?? 'Super Admin';
+                const targetCa = storeCashAssistance.find((c) => c.storeId === storeId);
+                setStoreCashAssistance((prev) =>
+                  prev.map((c) =>
+                    c.storeId === storeId
+                      ? {
+                          ...c,
+                          status,
+                          visibleToOwner: status === 'locked' ? false : true,
+                          ...(status === 'active' ? { approvedBy: actorName } : {}),
+                        }
+                      : c
+                  )
+                );
+                setStores((prev) =>
+                  prev.map((s) =>
+                    s.id === storeId ? { ...s, cashAssistanceActive: status === 'active' } : s
+                  )
+                );
+                await reviewStoreCashAssistanceAddon({
+                  storeId,
+                  status,
+                  approvedBy: actorName,
+                });
+                if (status === 'active' && targetCa) {
+                  void createNotificationDoc({
+                    id: `notif-ca-ok-${Date.now()}`,
+                    title: `Cash Assistance Activated · ${targetCa.storeName}`.slice(0, 140),
+                    body: `Your Cash Assistance add-on for ${targetCa.storeName} is now active in My Store.`,
+                    timestamp: 'Just now',
+                    type: 'cash_assistance',
+                    read: false,
+                    targetUserId: targetCa.storeOwnerId,
+                  });
+                }
+              }}
+              onUpdateStoreDeliveryStaff={async (storeId, staffIds) => {
+                if (!isActualAdmin) return;
+                const userUpdates: Array<{ userId: string; assignedStoreIds: string[] }> = [];
+                const nextUsers = users.map((u) => {
+                  const prevAssigned = u.assignedStoreIds ?? [];
+                  const shouldHave = staffIds.includes(u.id);
+                  const has = prevAssigned.includes(storeId);
+                  if (shouldHave === has) return u;
+                  const nextAssigned = shouldHave
+                    ? Array.from(new Set([...prevAssigned, storeId]))
+                    : prevAssigned.filter((id) => id !== storeId);
+                  userUpdates.push({ userId: u.id, assignedStoreIds: nextAssigned });
+                  return { ...u, assignedStoreIds: nextAssigned };
+                });
+                setStores((prev) =>
+                  prev.map((s) =>
+                    s.id === storeId ? { ...s, assignedDeliveryStaffIds: staffIds } : s
+                  )
+                );
+                setUsers(nextUsers);
+                await assignDeliveryStaffToStore({
+                  storeId,
+                  assignedDeliveryStaffIds: staffIds,
+                  userUpdates,
+                });
+              }}
               onDeleteMediaAsset={handleDeleteMediaAsset}
               onBulkDeleteMediaAssets={handleBulkDeleteMediaAssets}
               onExitPreview={isPreviewingOtherRole ? () => setPreviewRole(null) : undefined}
@@ -4869,7 +6087,7 @@ export default function App() {
               currentUser={currentUser}
               currentRole={currentRole}
               storeItems={items}
-              dueDays={pautanganSettings.dueDays}
+              dueDays={cashAssistanceSettings.dueDays}
               pendingProofsCount={pendingProofsCount}
               requestedThreadId={requestedChatThreadId}
               onOpenSignIn={() => setIsSignInOpen(true)}
@@ -4943,8 +6161,8 @@ export default function App() {
             icon: Users,
             badge: unreadCommunityCount,
           },
-          ...(canViewPautanganNav
-            ? [{ id: 'pautangan', label: 'Loan', icon: HandCoins, badge: 0 }]
+          ...(canViewCashAssistanceNav
+            ? [{ id: 'cashAssistance', label: 'Assist', icon: HandCoins, badge: 0 }]
             : []),
           ...(canViewDeliveryNav
             ? [{ id: 'delivery', label: 'Delivery', icon: Truck, badge: pendingDeliveriesCount }]
@@ -4994,7 +6212,7 @@ export default function App() {
         currentUser={currentUser}
         currentRole={currentRole}
         storeItems={items}
-        dueDays={pautanganSettings.dueDays}
+        dueDays={cashAssistanceSettings.dueDays}
         pendingProofsCount={pendingProofsCount}
         aiThread={myPrivateAiThread}
         onSendMessage={handleSendMessage}

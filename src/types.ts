@@ -26,16 +26,118 @@ export enum CommissionType {
 
 export type ActiveSection =
   | 'store'
+  | 'storeOwner'
   | 'ewallet'
   | 'community'
   | 'seller'
-  | 'pautangan'
+  | 'cashAssistance'
   | 'ledger'
   | 'delivery'
   | 'chat'
   | 'admin'
   | 'developer'
   | 'apps';
+
+export type StoreSubscriptionStatus = 'active' | 'past_due' | 'suspended';
+
+export type CashAssistanceSubscriptionStatus =
+  | 'locked'
+  | 'pending_approval'
+  | 'active'
+  | 'suspended';
+
+export interface PlatformConfig {
+  baseStoreMonthlyFee: number;
+  cashAssistanceMonthlyFee: number;
+  defaultDueDays: [number, number];
+  defaultDeliveryFee: number;
+  deliveryCommissionRate: number;
+  updatedAt?: string;
+}
+
+export interface StoreProfile {
+  id: string;
+  name: string;
+  description: string;
+  ownerId: string;
+  ownerName: string;
+  status: StoreSubscriptionStatus;
+  subscriptionStatus: StoreSubscriptionStatus;
+  monthlyFee: number;
+  cashAssistanceActive: boolean;
+  assignedDeliveryStaffIds: string[];
+  storeAnnouncement: string;
+  deliveryEnabled: boolean;
+  deliveryFee: number;
+  walletAccountName: string;
+  walletAccountNumber: string;
+  dueDays: [number, number];
+  categories: string[];
+  paymentMethods: PaymentMethodConfig[];
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface StoreCashAssistanceConfig {
+  storeId: string;
+  storeName: string;
+  storeOwnerId: string;
+  status: CashAssistanceSubscriptionStatus;
+  visibleToOwner: boolean;
+  monthlyFee: number;
+  monthlyInterestRate: number;
+  dueDays: [number, number];
+  availableTerms: number[];
+  requestedAt?: string;
+  requestNote?: string;
+  approvedBy?: string;
+  approvedAt?: string;
+  updatedAt?: string;
+}
+
+export interface StoreApplication {
+  id: string;
+  applicantId: string;
+  applicantName: string;
+  applicantDepartment: string;
+  storeName: string;
+  description: string;
+  paymentChannels: string;
+  quotedBaseFee: number;
+  status: 'pending' | 'approved' | 'rejected';
+  reviewedBy?: string;
+  reviewedAt?: string;
+  provisionedStoreId?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface CatalogTemplate {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  suggestedPrice: number;
+  image?: string;
+  barcode?: string;
+  createdByStoreId: string;
+  createdByStoreName: string;
+  createdByUserId: string;
+  createdAt: string;
+}
+
+export interface StoreCustomerCredit {
+  id: string;
+  storeId: string;
+  storeName: string;
+  storeOwnerId: string;
+  userId: string;
+  userName: string;
+  balance: number;
+  totalCharged: number;
+  totalPaid: number;
+  updatedAt: string;
+}
 
 export interface UserAccount {
   id: string;
@@ -46,8 +148,11 @@ export interface UserAccount {
   tableNumber?: string;
   role: UserRole;
   debtBalance: number;
-  pautanganEnabled: boolean;
-  pautanganLimit: number;
+  storeDebtBalances?: Record<string, number>;
+  cashAssistanceEnabled: boolean;
+  cashAssistanceLimit: number;
+  ownedStoreIds?: string[];
+  assignedStoreIds?: string[];
   avatarInitials: string;
   avatarUrl?: string;
   totalSpent: number;
@@ -64,6 +169,10 @@ export interface ItemCostEntry {
 
 export interface StoreItem {
   id: string;
+  storeId?: string;
+  storeName?: string;
+  storeOwnerId?: string;
+  templateId?: string;
   name: string;
   category: string;
   description: string;
@@ -80,6 +189,9 @@ export type StockAdjustmentType = 'add' | 'deduct' | 'recount' | 'restock';
 
 export interface StockAdjustmentLog {
   id: string;
+  storeId?: string;
+  storeName?: string;
+  storeOwnerId?: string;
   itemId: string;
   itemName: string;
   itemCategory: string;
@@ -111,18 +223,24 @@ export interface OrderLogEntry {
 
 export interface StoreOrder {
   id: string;
+  storeId?: string;
+  storeName?: string;
+  storeOwnerId?: string;
+  assignedDeliveryStaffIds?: string[];
   userId: string;
   userName: string;
   buyerDepartment?: string;
   buyerTableRow?: string;
   buyerTableNumber?: string;
   items: { itemId: string; name: string; quantity: number; unitPrice: number }[];
+  subtotal?: number;
   totalAmount: number;
   deliveryFee?: number;
   deliveryCommission?: number;
   fulfillment: FulfillmentType;
   deliveryNote?: string;
   paymentMethod: string;
+  paymentType?: 'cash' | 'credit' | 'ewallet';
   status:
     | 'Confirmed'
     | 'Pending Payment Proof'
@@ -178,6 +296,9 @@ export interface StoreConfig {
 
 export interface PaymentProof {
   id: string;
+  storeId?: string;
+  storeName?: string;
+  storeOwnerId?: string;
   userId: string;
   userName: string;
   amount: number;
@@ -186,7 +307,7 @@ export interface PaymentProof {
   purpose:
     | 'Store Debt Settlement'
     | 'Order Payment'
-    | 'Pautangan Repayment'
+    | 'Cash Assistance Repayment'
     | 'Community Seller Settlement';
   imageDataUrl: string;
   submittedAt: string;
@@ -271,7 +392,7 @@ export interface SellerConfig {
   updatedAt?: string;
 }
 
-export interface PautanganSettings {
+export interface CashAssistanceSettings {
   globalEnabled: boolean;
   monthlyInterestRate: number;
   dueDays: [number, number];
@@ -299,6 +420,9 @@ export interface LoanInstallment {
 
 export interface LoanRecord {
   id: string;
+  storeId?: string;
+  storeName?: string;
+  storeOwnerId?: string;
   userId: string;
   userName: string;
   principal: number;
@@ -338,7 +462,16 @@ export interface NotificationItem {
   title: string;
   body: string;
   timestamp: string;
-  type: 'reminder' | 'payment' | 'marketplace' | 'chat' | 'delivery' | 'community' | 'ewallet';
+  type:
+    | 'reminder'
+    | 'payment'
+    | 'marketplace'
+    | 'chat'
+    | 'delivery'
+    | 'community'
+    | 'ewallet'
+    | 'store'
+    | 'cash_assistance';
   read: boolean;
   targetUserId?: string;
 }
@@ -394,4 +527,3 @@ export interface EWalletPost {
   fills: EWalletFill[];
   comments: EWalletComment[];
 }
-

@@ -2,7 +2,7 @@
   "entities": {
     "UserAccount": {
       "title": "UserAccount",
-      "description": "Private coworker account record containing verified email, RBAC role, store debt balance, saved Gmail avatar URL, and admin-controlled Pautangan access.",
+      "description": "Private coworker account record containing verified email, RBAC role, store debt balance, per-store debt map, owned/assigned store IDs, saved Gmail avatar URL, and admin-controlled Cash Assistance permissions.",
       "type": "object",
       "properties": {
         "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
@@ -13,15 +13,18 @@
         "tableNumber": { "type": "string", "maxLength": 40 },
         "role": { "type": "string", "enum": ["guest", "member", "delivery_staff", "admin", "super_admin"] },
         "debtBalance": { "type": "number" },
-        "pautanganEnabled": { "type": "boolean" },
-        "pautanganLimit": { "type": "number" },
+        "storeDebtBalances": { "type": "object" },
+        "cashAssistanceEnabled": { "type": "boolean" },
+        "cashAssistanceLimit": { "type": "number" },
+        "ownedStoreIds": { "type": "array" },
+        "assignedStoreIds": { "type": "array" },
         "avatarInitials": { "type": "string", "maxLength": 6 },
         "avatarUrl": { "type": "string", "maxLength": 1000 },
         "totalSpent": { "type": "number" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["id", "name", "email", "department", "role", "debtBalance", "pautanganEnabled", "pautanganLimit", "avatarInitials", "totalSpent"]
+      "required": ["id", "name", "email", "department", "role", "debtBalance", "cashAssistanceEnabled", "cashAssistanceLimit", "avatarInitials", "totalSpent"]
     },
     "CoworkerProfile": {
       "title": "CoworkerProfile",
@@ -39,12 +42,140 @@
       },
       "required": ["id", "name", "department", "avatarInitials"]
     },
-    "StoreItem": {
-      "title": "StoreItem",
-      "description": "Pantry SKU with selling price, cost price, cost history, and live stock.",
+    "PlatformConfig": {
+      "title": "PlatformConfig",
+      "description": "Platform-level subscription pricing, default cutoff days, and delivery commission rules configured by Super Admin in Developer Settings.",
+      "type": "object",
+      "properties": {
+        "baseStoreMonthlyFee": { "type": "number" },
+        "cashAssistanceMonthlyFee": { "type": "number" },
+        "defaultDueDays": { "type": "array" },
+        "defaultDeliveryFee": { "type": "number" },
+        "deliveryCommissionRate": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["baseStoreMonthlyFee", "cashAssistanceMonthlyFee", "defaultDueDays", "defaultDeliveryFee", "deliveryCommissionRate"]
+    },
+    "StoreProfile": {
+      "title": "StoreProfile",
+      "description": "Multi-store profile containing store metadata, base subscription status, owner reference, delivery assignment, payment channels, and cutoff schedule.",
       "type": "object",
       "properties": {
         "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "description": { "type": "string", "maxLength": 500 },
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "status": { "type": "string", "enum": ["active", "past_due", "suspended"] },
+        "subscriptionStatus": { "type": "string", "enum": ["active", "past_due", "suspended"] },
+        "monthlyFee": { "type": "number" },
+        "cashAssistanceActive": { "type": "boolean" },
+        "assignedDeliveryStaffIds": { "type": "array" },
+        "storeAnnouncement": { "type": "string", "maxLength": 500 },
+        "deliveryEnabled": { "type": "boolean" },
+        "deliveryFee": { "type": "number" },
+        "walletAccountName": { "type": "string", "maxLength": 120 },
+        "walletAccountNumber": { "type": "string", "maxLength": 60 },
+        "dueDays": { "type": "array" },
+        "categories": { "type": "array" },
+        "paymentMethods": { "type": "array" },
+        "createdAt": { "type": "string", "maxLength": 60 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "description", "ownerId", "ownerName", "status", "subscriptionStatus", "monthlyFee", "cashAssistanceActive", "assignedDeliveryStaffIds", "storeAnnouncement", "deliveryEnabled", "deliveryFee", "walletAccountName", "walletAccountNumber", "dueDays", "categories", "paymentMethods", "createdAt"]
+    },
+    "StoreCashAssistanceConfig": {
+      "title": "StoreCashAssistanceConfig",
+      "description": "Confidential per-store Cash Assistance add-on subscription configuration, strictly hidden from regular coworkers and only visible to the Store Owner when visibleToOwner is enabled by Admin/SuperAdmin.",
+      "type": "object",
+      "properties": {
+        "storeId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "storeName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "storeOwnerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "status": { "type": "string", "enum": ["locked", "pending_approval", "active", "suspended"] },
+        "visibleToOwner": { "type": "boolean" },
+        "monthlyFee": { "type": "number" },
+        "monthlyInterestRate": { "type": "number" },
+        "dueDays": { "type": "array" },
+        "availableTerms": { "type": "array" },
+        "requestedAt": { "type": "string", "maxLength": 60 },
+        "requestNote": { "type": "string", "maxLength": 400 },
+        "approvedBy": { "type": "string", "maxLength": 120 },
+        "approvedAt": { "type": "string", "maxLength": 60 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["storeId", "storeName", "storeOwnerId", "status", "visibleToOwner", "monthlyFee", "monthlyInterestRate", "dueDays", "availableTerms"]
+    },
+    "StoreApplication": {
+      "title": "StoreApplication",
+      "description": "Coworker application to open an independent store on the DeskPantry multi-store platform.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "applicantId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "applicantName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "applicantDepartment": { "type": "string", "maxLength": 120 },
+        "storeName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "description": { "type": "string", "maxLength": 500 },
+        "paymentChannels": { "type": "string", "maxLength": 300 },
+        "quotedBaseFee": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "reviewedBy": { "type": "string", "maxLength": 120 },
+        "reviewedAt": { "type": "string", "maxLength": 60 },
+        "provisionedStoreId": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "maxLength": 60 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "applicantId", "applicantName", "applicantDepartment", "storeName", "description", "paymentChannels", "quotedBaseFee", "status", "createdAt"]
+    },
+    "CatalogTemplate": {
+      "title": "CatalogTemplate",
+      "description": "Shared product template (e.g., Nova Multigrain Chips) adoptable by multiple independent stores with their own pricing, cost, and stock.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 140 },
+        "category": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "description": { "type": "string", "maxLength": 600 },
+        "suggestedPrice": { "type": "number" },
+        "image": { "type": "string", "maxLength": 400000 },
+        "barcode": { "type": "string", "maxLength": 64 },
+        "createdByStoreId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdByStoreName": { "type": "string", "maxLength": 120 },
+        "createdByUserId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "maxLength": 60 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "category", "description", "suggestedPrice", "createdByStoreId", "createdByStoreName", "createdByUserId", "createdAt"]
+    },
+    "StoreCustomerCredit": {
+      "title": "StoreCustomerCredit",
+      "description": "Store-isolated customer store credit balance ledger preventing cross-store balance bleed.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "storeId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "storeName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "storeOwnerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "balance": { "type": "number" },
+        "totalCharged": { "type": "number" },
+        "totalPaid": { "type": "number" },
+        "updatedAt": { "type": "string", "maxLength": 60 }
+      },
+      "required": ["id", "storeId", "storeName", "storeOwnerId", "userId", "userName", "balance", "totalCharged", "totalPaid", "updatedAt"]
+    },
+    "StoreItem": {
+      "title": "StoreItem",
+      "description": "Store-scoped SKU with selling price, cost price, cost history, template reference, and live stock.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "storeId": { "type": "string", "maxLength": 128 },
+        "storeName": { "type": "string", "maxLength": 120 },
+        "storeOwnerId": { "type": "string", "maxLength": 128 },
+        "templateId": { "type": "string", "maxLength": 128 },
         "name": { "type": "string", "minLength": 1, "maxLength": 140 },
         "category": { "type": "string", "minLength": 1, "maxLength": 80 },
         "description": { "type": "string", "maxLength": 600 },
@@ -61,10 +192,13 @@
     },
     "StockAdjustmentLog": {
       "title": "StockAdjustmentLog",
-      "description": "Immutable inventory stock adjustment and restock audit trail record.",
+      "description": "Store-scoped immutable inventory stock adjustment and restock audit trail record.",
       "type": "object",
       "properties": {
         "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "storeId": { "type": "string", "maxLength": 128 },
+        "storeName": { "type": "string", "maxLength": 120 },
+        "storeOwnerId": { "type": "string", "maxLength": 128 },
         "itemId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "itemName": { "type": "string", "minLength": 1, "maxLength": 140 },
         "itemCategory": { "type": "string", "minLength": 1, "maxLength": 80 },
@@ -101,9 +235,9 @@
       },
       "required": ["storeAnnouncement", "deliveryEnabled", "deliveryFee", "walletAccountName", "walletAccountNumber", "categories", "paymentMethods", "dueDays"]
     },
-    "PautanganSettings": {
-      "title": "PautanganSettings",
-      "description": "Confidential Pautangan cash assistance global configuration readable only by Admin or explicitly enabled coworkers.",
+    "CashAssistanceSettings": {
+      "title": "CashAssistanceSettings",
+      "description": "Confidential Cash Assistance global configuration readable only by Admin or explicitly enabled coworkers.",
       "type": "object",
       "properties": {
         "globalEnabled": { "type": "boolean" },
@@ -116,22 +250,28 @@
     },
     "StoreOrder": {
       "title": "StoreOrder",
-      "description": "Coworker store or marketplace order with fulfillment, payment, and delivery tracking.",
+      "description": "Store-scoped or marketplace order with split multi-store metadata, fulfillment, paymentType, and assigned delivery runners.",
       "type": "object",
       "properties": {
         "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "storeId": { "type": "string", "maxLength": 128 },
+        "storeName": { "type": "string", "maxLength": 120 },
+        "storeOwnerId": { "type": "string", "maxLength": 128 },
+        "assignedDeliveryStaffIds": { "type": "array" },
         "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "userName": { "type": "string", "minLength": 1, "maxLength": 120 },
         "buyerDepartment": { "type": "string", "maxLength": 120 },
         "buyerTableRow": { "type": "string", "maxLength": 40 },
         "buyerTableNumber": { "type": "string", "maxLength": 40 },
         "items": { "type": "array" },
+        "subtotal": { "type": "number" },
         "totalAmount": { "type": "number" },
         "deliveryFee": { "type": "number" },
         "deliveryCommission": { "type": "number" },
         "fulfillment": { "type": "string", "enum": ["Pickup", "Delivery"] },
         "deliveryNote": { "type": "string", "maxLength": 300 },
         "paymentMethod": { "type": "string", "maxLength": 80 },
+        "paymentType": { "type": "string", "enum": ["cash", "credit", "ewallet"] },
         "status": { "type": "string", "enum": ["Confirmed", "Pending Payment Proof", "Completed", "Pending Admin Review", "Pending Seller Confirmation", "Rejected"] },
         "deliveryStatus": { "type": "string", "enum": ["Pending Dispatch", "Out for Delivery", "Delivered", "Pending Admin Approval", "Pending Seller Approval", "Cancelled"] },
         "assignedRunnerId": { "type": "string", "maxLength": 128 },
@@ -155,16 +295,19 @@
     },
     "PaymentProof": {
       "title": "PaymentProof",
-      "description": "Uploaded digital payment receipt awaiting Admin confirmation.",
+      "description": "Uploaded digital payment receipt scoped to a specific store or seller.",
       "type": "object",
       "properties": {
         "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "storeId": { "type": "string", "maxLength": 128 },
+        "storeName": { "type": "string", "maxLength": 120 },
+        "storeOwnerId": { "type": "string", "maxLength": 128 },
         "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "userName": { "type": "string", "minLength": 1, "maxLength": 120 },
         "amount": { "type": "number" },
         "channel": { "type": "string", "maxLength": 60 },
         "referenceNo": { "type": "string", "maxLength": 100 },
-        "purpose": { "type": "string", "enum": ["Store Debt Settlement", "Order Payment", "Pautangan Repayment", "Community Seller Settlement"] },
+        "purpose": { "type": "string", "enum": ["Store Debt Settlement", "Order Payment", "Cash Assistance Repayment", "Community Seller Settlement"] },
         "imageDataUrl": { "type": "string", "maxLength": 400000 },
         "submittedAt": { "type": "string", "maxLength": 80 },
         "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
@@ -181,10 +324,13 @@
     },
     "LoanRecord": {
       "title": "LoanRecord",
-      "description": "Confidential Pautangan cash assistance record accessible only by owner and Admin/SuperAdmin.",
+      "description": "Confidential Cash Assistance record accessible only by borrower, subscribed Store Owner, and Admin/SuperAdmin.",
       "type": "object",
       "properties": {
         "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "storeId": { "type": "string", "maxLength": 128 },
+        "storeName": { "type": "string", "maxLength": 120 },
+        "storeOwnerId": { "type": "string", "maxLength": 128 },
         "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "userName": { "type": "string", "minLength": 1, "maxLength": 120 },
         "principal": { "type": "number" },
@@ -328,14 +474,14 @@
     },
     "NotificationItem": {
       "title": "NotificationItem",
-      "description": "User or admin notification entry.",
+      "description": "User, store owner, or admin notification entry.",
       "type": "object",
       "properties": {
         "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "title": { "type": "string", "maxLength": 140 },
         "body": { "type": "string", "maxLength": 500 },
         "timestamp": { "type": "string", "maxLength": 60 },
-        "type": { "type": "string", "enum": ["reminder", "payment", "marketplace", "chat", "delivery", "community", "ewallet"] },
+        "type": { "type": "string", "enum": ["reminder", "payment", "marketplace", "chat", "delivery", "community", "ewallet", "store", "cash_assistance"] },
         "read": { "type": "boolean" },
         "targetUserId": { "type": "string", "maxLength": 128 },
         "createdAtMs": { "type": "number" }
@@ -364,31 +510,55 @@
   "firestore": {
     "/users/{userId}": {
       "schema": { "$ref": "#/entities/UserAccount" },
-      "description": "Private coworker account records (PII, role, debtBalance, Gmail avatarUrl, Pautangan permissions)."
+      "description": "Private coworker account records (PII, role, storeDebtBalances, ownedStoreIds, assignedStoreIds, Cash Assistance permissions)."
     },
     "/coworkerProfiles/{userId}": {
       "schema": { "$ref": "#/entities/CoworkerProfile" },
       "description": "Non-PII coworker display profiles (name, department, avatar) for authenticated display."
     },
+    "/config/platform": {
+      "schema": { "$ref": "#/entities/PlatformConfig" },
+      "description": "Platform subscription pricing, default cutoffs, and delivery commission configuration."
+    },
+    "/stores/{storeId}": {
+      "schema": { "$ref": "#/entities/StoreProfile" },
+      "description": "Public multi-store profiles, announcements, fulfillment options, and payment channels."
+    },
+    "/storeCashAssistance/{storeId}": {
+      "schema": { "$ref": "#/entities/StoreCashAssistanceConfig" },
+      "description": "Confidential per-store Cash Assistance add-on configuration hidden from non-owners and locked until Admin/SuperAdmin reveals and approves."
+    },
+    "/storeApplications/{applicationId}": {
+      "schema": { "$ref": "#/entities/StoreApplication" },
+      "description": "Coworker applications to open independent stores."
+    },
+    "/catalogTemplates/{templateId}": {
+      "schema": { "$ref": "#/entities/CatalogTemplate" },
+      "description": "Shared product catalog templates adoptable across stores."
+    },
+    "/storeCustomerCredits/{creditId}": {
+      "schema": { "$ref": "#/entities/StoreCustomerCredit" },
+      "description": "Per-store isolated customer store credit ledgers."
+    },
     "/storeItems/{itemId}": {
       "schema": { "$ref": "#/entities/StoreItem" },
-      "description": "Public storefront inventory catalog and cost history."
+      "description": "Store-scoped inventory catalog items and cost history."
     },
     "/stockAdjustments/{adjustmentId}": {
       "schema": { "$ref": "#/entities/StockAdjustmentLog" },
-      "description": "Admin-only immutable stock adjustment and restock history logs."
+      "description": "Immutable store-scoped stock adjustment and restock history logs."
     },
     "/config/store": {
       "schema": { "$ref": "#/entities/StoreConfig" },
-      "description": "Public storefront configuration, payment methods, and due days."
+      "description": "Flagship storefront configuration, payment methods, and due days."
     },
-    "/config/pautangan": {
-      "schema": { "$ref": "#/entities/PautanganSettings" },
-      "description": "Confidential Pautangan settings readable only by Admin or approved coworkers."
+    "/config/cashAssistance": {
+      "schema": { "$ref": "#/entities/CashAssistanceSettings" },
+      "description": "Confidential Cash Assistance settings readable only by Admin, approved coworkers, or authorized Store Owners."
     },
     "/orders/{orderId}": {
       "schema": { "$ref": "#/entities/StoreOrder" },
-      "description": "Store and marketplace orders."
+      "description": "Store-scoped and marketplace orders."
     },
     "/paymentProofs/{proofId}": {
       "schema": { "$ref": "#/entities/PaymentProof" },
@@ -396,7 +566,7 @@
     },
     "/loans/{loanId}": {
       "schema": { "$ref": "#/entities/LoanRecord" },
-      "description": "Confidential Pautangan cash assistance records."
+      "description": "Confidential Cash Assistance records."
     },
     "/suggestions/{suggestionId}": {
       "schema": { "$ref": "#/entities/SuggestionItem" },
@@ -424,7 +594,7 @@
     },
     "/notifications/{notificationId}": {
       "schema": { "$ref": "#/entities/NotificationItem" },
-      "description": "Targeted user and admin notifications."
+      "description": "Targeted user, store owner, and admin notifications."
     },
     "/internalApps/{appId}": {
       "schema": { "$ref": "#/entities/InternalApp" },

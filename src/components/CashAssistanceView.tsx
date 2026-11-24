@@ -5,14 +5,19 @@ import {
   Banknote,
   CalendarClock,
   CheckCircle2,
+  Clock3,
   Lock,
+  ShieldCheck,
+  Store,
   Upload,
   X,
 } from 'lucide-react';
 import {
+  CashAssistanceSettings,
   LoanRecord,
-  PautanganSettings,
   PaymentMethodConfig,
+  PlatformConfig,
+  StoreCashAssistanceConfig,
   UserAccount,
   UserRole,
 } from '../types';
@@ -21,14 +26,17 @@ import { compressImageFileToDataUrl, isValidUploadedReceipt } from '../utils/ima
 import { ImagePreviewModal, ImagePreviewTarget } from './ImagePreviewModal';
 import { PaymentMethodCard } from './PaymentMethodCard';
 
-interface PautanganViewProps {
-  settings: PautanganSettings;
+interface CashAssistanceViewProps {
+  settings: CashAssistanceSettings;
+  platformConfig?: PlatformConfig;
   loans: LoanRecord[];
   paymentMethods: PaymentMethodConfig[];
+  storeCashAssistance: StoreCashAssistanceConfig[];
   currentUser: UserAccount | null;
   currentRole: UserRole;
   onOpenSignIn: () => void;
   onOpenLedger: () => void;
+  onOpenStoreWorkspace?: (storeId: string) => void;
   onRequestLoan: (principal: number, months: number) => void;
   onRepayLoan: (payload: {
     loanId: string;
@@ -37,18 +45,23 @@ interface PautanganViewProps {
     referenceNo?: string;
     proofImage?: string;
   }) => void;
+  onRequestStoreCashAssistance?: (storeId: string, note: string) => Promise<void> | void;
 }
 
-export const PautanganView: React.FC<PautanganViewProps> = ({
+export const CashAssistanceView: React.FC<CashAssistanceViewProps> = ({
   settings,
+  platformConfig,
   loans,
   paymentMethods,
+  storeCashAssistance,
   currentUser,
   currentRole,
   onOpenSignIn,
   onOpenLedger,
+  onOpenStoreWorkspace,
   onRequestLoan,
   onRepayLoan,
+  onRequestStoreCashAssistance,
 }) => {
   const availableTerms = useMemo(
     () =>
@@ -81,8 +94,13 @@ export const PautanganView: React.FC<PautanganViewProps> = ({
   const [repayError, setRepayError] = useState('');
   const [banner, setBanner] = useState('');
   const [previewImage, setPreviewImage] = useState<ImagePreviewTarget | null>(null);
+  const [addonNotes, setAddonNotes] = useState<Record<string, string>>({});
+  const [submittingAddonStoreId, setSubmittingAddonStoreId] = useState<string | null>(null);
 
   const isGuest = currentRole === UserRole.Guest || !currentUser;
+  const isAdminOrSuper =
+    currentRole === UserRole.Admin || currentRole === UserRole.SuperAdmin;
+
   const userLoans = currentUser ? loans.filter((l) => l.userId === currentUser.id) : [];
   const activeOutstanding = userLoans
     .filter((l) => l.status === 'Active')
@@ -91,10 +109,25 @@ export const PautanganView: React.FC<PautanganViewProps> = ({
   const hasCurrentDebtToPay =
     Boolean(currentUser) && ((currentUser?.debtBalance ?? 0) > 0 || activeOutstanding > 0);
 
-  const creditLimit = currentUser?.pautanganLimit ?? 0;
+  const creditLimit = currentUser?.cashAssistanceLimit ?? 0;
   const availableCredit = Math.max(0, creditLimit - activeOutstanding);
   const userEligible =
-    !isGuest && settings.globalEnabled && Boolean(currentUser?.pautanganEnabled);
+    !isGuest && settings.globalEnabled && Boolean(currentUser?.cashAssistanceEnabled);
+
+  // Confidential visibility: Only Store Owners (never regular coworkers) can view
+  // Cash Assistance store add-on cards, and ONLY when Admin enabled visibleToOwner === true.
+  const visibleOwnerStoreAddons = useMemo(() => {
+    if (!currentUser) return [];
+    const ownedIds = currentUser.ownedStoreIds ?? [];
+    if (ownedIds.length === 0 && !isAdminOrSuper) return [];
+    return storeCashAssistance.filter((cfg) => {
+      const ownsStore =
+        cfg.storeOwnerId === currentUser.id || ownedIds.includes(cfg.storeId);
+      if (!ownsStore && !isAdminOrSuper) return false;
+      if (isAdminOrSuper) return cfg.visibleToOwner || cfg.status !== 'locked';
+      return cfg.visibleToOwner === true;
+    });
+  }, [currentUser, storeCashAssistance, isAdminOrSuper]);
 
   const selectedTermMonths = availableTerms.includes(months)
     ? months
@@ -115,7 +148,7 @@ export const PautanganView: React.FC<PautanganViewProps> = ({
     if (numericPrincipal < 100 || numericPrincipal > availableCredit) return;
     onRequestLoan(numericPrincipal, selectedTermMonths);
     setBanner(
-      `Cash assistance of ${formatPHP(numericPrincipal)} (${selectedTermMonths} mo term) approved & payment schedule generated.`
+      `Cash Assistance of ${formatPHP(numericPrincipal)} (${selectedTermMonths} mo term) approved & payment schedule generated.`
     );
     setTimeout(() => setBanner(''), 5000);
   };
@@ -168,7 +201,7 @@ export const PautanganView: React.FC<PautanganViewProps> = ({
     setBanner(
       selectedRepayMethod.type === 'cash'
         ? `Cash repayment of ${formatPHP(amt)} applied to ${repayModalLoan.id}.`
-        : `${selectedRepayMethod.title} repayment proof submitted for Admin verification.`
+        : `${selectedRepayMethod.title} repayment proof submitted for verification.`
     );
     setRepayModalLoan(null);
     setRepayRef('');
@@ -177,14 +210,29 @@ export const PautanganView: React.FC<PautanganViewProps> = ({
     setTimeout(() => setBanner(''), 5000);
   };
 
+  const handleAddonRequest = async (storeId: string) => {
+    if (!onRequestStoreCashAssistance) return;
+    setSubmittingAddonStoreId(storeId);
+    try {
+      await onRequestStoreCashAssistance(
+        storeId,
+        addonNotes[storeId]?.trim() || 'Requesting Cash Assistance add-on activation for store.'
+      );
+      setBanner('Cash Assistance add-on application submitted for Admin / Super Admin approval.');
+      setTimeout(() => setBanner(''), 5000);
+    } finally {
+      setSubmittingAddonStoreId(null);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl sm:text-3xl font-bold text-stone-900 dark:text-stone-100">
-          Pautangan (Cash Assistance)
+          Cash Assistance
         </h1>
         <p className="mt-1 text-sm text-stone-600 dark:text-stone-400">
-          Short-term department cash assistance with transparent monthly interest, automatic installment schedules, and {settings.dueDays[0]}th/{settings.dueDays[1]}th repayment cutoffs.
+          Confidential short-term cash assistance with transparent monthly interest, automatic installment schedules, and {settings.dueDays[0]}th/{settings.dueDays[1]}th repayment cutoffs.
         </p>
       </div>
 
@@ -195,48 +243,161 @@ export const PautanganView: React.FC<PautanganViewProps> = ({
         </div>
       )}
 
-      {/* Top Metrics */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] p-5">
-          <div className="text-xs text-stone-500 dark:text-stone-400">Program Status</div>
-          <div className="mt-1 text-lg font-bold text-stone-900 dark:text-stone-100">
-            {!settings.globalEnabled
-              ? 'Paused Globally'
-              : isGuest
-                ? 'Sign In Required'
-                : currentUser.pautanganEnabled
-                  ? 'Enabled for You'
-                  : 'Disabled by Admin'}
+      {/* Store Owner Confidential Cash Assistance Add-On Section (never visible to non-owners) */}
+      {!isGuest && visibleOwnerStoreAddons.length > 0 && (
+        <section className="rounded-2xl border border-teal-200 dark:border-teal-800/70 bg-teal-50/40 dark:bg-teal-950/25 p-5 space-y-4">
+          <div className="flex items-start gap-3">
+            <div className="w-9 h-9 rounded-xl bg-teal-700 text-white flex items-center justify-center shrink-0">
+              <Store className="w-4 h-4" />
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-stone-900 dark:text-stone-100">
+                Store Cash Assistance Add-On Subscriptions
+              </h2>
+              <p className="text-xs text-stone-600 dark:text-stone-400">
+                Confidential add-on module revealed for your store(s). Separate from your base monthly store subscription.
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {visibleOwnerStoreAddons.map((cfg) => {
+              const fee = cfg.monthlyFee || platformConfig?.cashAssistanceMonthlyFee || 299;
+              return (
+                <div
+                  key={cfg.storeId}
+                  className="rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] p-4 space-y-3"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <div className="text-sm font-bold text-stone-900 dark:text-stone-100">
+                        {cfg.storeName}
+                      </div>
+                      <div className="text-xs text-stone-500 dark:text-stone-400">
+                        Add-On Fee: <span className="font-mono font-semibold">{formatPHP(fee)}/mo</span> · Rate: {cfg.monthlyInterestRate}%/mo
+                      </div>
+                    </div>
+                    <span
+                      className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
+                        cfg.status === 'active'
+                          ? 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300'
+                          : cfg.status === 'pending_approval'
+                            ? 'bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300'
+                            : cfg.status === 'suspended'
+                              ? 'bg-red-100 dark:bg-red-950/60 text-red-800 dark:text-red-300'
+                              : 'bg-stone-100 dark:bg-stone-800 text-stone-700 dark:text-stone-300'
+                      }`}
+                    >
+                      {cfg.status === 'active'
+                        ? 'Subscribed & Active'
+                        : cfg.status === 'pending_approval'
+                          ? 'Pending Admin Approval'
+                          : cfg.status === 'suspended'
+                            ? 'Suspended'
+                            : 'Locked (Invite Revealed)'}
+                    </span>
+                  </div>
+
+                  {cfg.status === 'locked' && onRequestStoreCashAssistance && (
+                    <div className="space-y-2.5">
+                      <input
+                        type="text"
+                        value={addonNotes[cfg.storeId] ?? ''}
+                        onChange={(e) =>
+                          setAddonNotes((prev) => ({
+                            ...prev,
+                            [cfg.storeId]: e.target.value,
+                          }))
+                        }
+                        placeholder="Optional note for Admin review (target monthly pool, terms)..."
+                        className="w-full min-h-[38px] rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-[#172523] px-3 text-xs text-stone-900 dark:text-stone-100"
+                      />
+                      <button
+                        type="button"
+                        disabled={submittingAddonStoreId === cfg.storeId}
+                        onClick={() => void handleAddonRequest(cfg.storeId)}
+                        className="w-full min-h-[38px] inline-flex items-center justify-center gap-1.5 rounded-xl bg-teal-700 px-3.5 py-2 text-xs font-semibold text-white hover:bg-teal-800 disabled:opacity-50 cursor-pointer"
+                      >
+                        <ShieldCheck className="w-3.5 h-3.5" />
+                        <span>
+                          {submittingAddonStoreId === cfg.storeId
+                            ? 'Submitting Application...'
+                            : `Apply for Cash Assistance Add-On (${formatPHP(fee)}/mo)`}
+                        </span>
+                      </button>
+                    </div>
+                  )}
+
+                  {cfg.status === 'pending_approval' && (
+                    <div className="flex items-center gap-2 text-xs text-amber-800 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/35 border border-amber-200 dark:border-amber-800/60 rounded-xl px-3 py-2">
+                      <Clock3 className="w-4 h-4 shrink-0" />
+                      <span>
+                        Submitted {cfg.requestedAt || 'recently'}. Waiting for Super Admin / Admin approval.
+                      </span>
+                    </div>
+                  )}
+
+                  {cfg.status === 'active' && onOpenStoreWorkspace && (
+                    <button
+                      type="button"
+                      onClick={() => onOpenStoreWorkspace(cfg.storeId)}
+                      className="w-full min-h-[38px] inline-flex items-center justify-center gap-1.5 rounded-xl border border-teal-700 text-teal-800 dark:text-teal-200 px-3 py-1.5 text-xs font-semibold hover:bg-teal-50 dark:hover:bg-teal-950/40 cursor-pointer"
+                    >
+                      <span>Open Store Cash Assistance Workspace</span>
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      {/* Top Metrics (Shown for eligible borrowers or guests) */}
+      {(isGuest || currentUser?.cashAssistanceEnabled) && (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] p-5">
+            <div className="text-xs text-stone-500 dark:text-stone-400">Program Status</div>
+            <div className="mt-1 text-lg font-bold text-stone-900 dark:text-stone-100">
+              {!settings.globalEnabled
+                ? 'Paused Globally'
+                : isGuest
+                  ? 'Sign In Required'
+                  : currentUser?.cashAssistanceEnabled
+                    ? 'Enabled for You'
+                    : 'Disabled by Admin'}
+            </div>
+          </div>
+          <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] p-5">
+            <div className="text-xs text-stone-500 dark:text-stone-400">Monthly Interest Rate</div>
+            <div className="mt-1 text-lg font-bold text-stone-900 dark:text-stone-100 font-mono tabular-nums">
+              {settings.monthlyInterestRate}% / mo
+            </div>
+          </div>
+          <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] p-5">
+            <div className="text-xs text-stone-500 dark:text-stone-400">Your Credit Limit</div>
+            <div className="mt-1 text-lg font-bold text-stone-900 dark:text-stone-100 font-mono tabular-nums">
+              {isGuest ? '—' : formatPHP(creditLimit)}
+            </div>
+          </div>
+          <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] p-5">
+            <div className="text-xs text-stone-500 dark:text-stone-400">Available to Borrow</div>
+            <div className="mt-1 text-lg font-bold text-teal-700 dark:text-teal-400 font-mono tabular-nums">
+              {isGuest ? '—' : hasCurrentDebtToPay ? 'Settle Current Debt' : formatPHP(availableCredit)}
+            </div>
           </div>
         </div>
-        <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] p-5">
-          <div className="text-xs text-stone-500 dark:text-stone-400">Monthly Interest Rate</div>
-          <div className="mt-1 text-lg font-bold text-stone-900 dark:text-stone-100 font-mono tabular-nums">
-            {settings.monthlyInterestRate}% / mo
-          </div>
-        </div>
-        <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] p-5">
-          <div className="text-xs text-stone-500 dark:text-stone-400">Your Credit Limit</div>
-          <div className="mt-1 text-lg font-bold text-stone-900 dark:text-stone-100 font-mono tabular-nums">
-            {isGuest ? '—' : formatPHP(creditLimit)}
-          </div>
-        </div>
-        <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] p-5">
-          <div className="text-xs text-stone-500 dark:text-stone-400">Available to Borrow</div>
-          <div className="mt-1 text-lg font-bold text-teal-700 dark:text-teal-400 font-mono tabular-nums">
-            {isGuest ? '—' : hasCurrentDebtToPay ? 'Settle Current Debt' : formatPHP(availableCredit)}
-          </div>
-        </div>
-      </div>
+      )}
 
       {isGuest ? (
         <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] p-8 text-center">
           <Lock className="w-8 h-8 text-stone-400 mx-auto" />
           <h2 className="mt-3 text-lg font-bold text-stone-900 dark:text-stone-100">
-            Sign in to check your Pautangan eligibility
+            Sign in to check your Cash Assistance eligibility
           </h2>
           <p className="mt-1 text-sm text-stone-600 dark:text-stone-400 max-w-md mx-auto">
-            Coworkers can view their credit limits, apply for cash assistance, and review automatic installment schedules after signing in.
+            Eligible coworkers can view their credit limits, apply for cash assistance, and review automatic installment schedules after signing in.
           </p>
           <button
             type="button"
@@ -246,21 +407,21 @@ export const PautanganView: React.FC<PautanganViewProps> = ({
             Sign In with Gmail / Email
           </button>
         </div>
-      ) : !userEligible ? (
+      ) : !userEligible && visibleOwnerStoreAddons.length === 0 ? (
         <div className="rounded-2xl border border-amber-200 dark:border-amber-800/70 bg-amber-50 dark:bg-amber-950/40 p-6 flex items-start gap-3">
           <AlertCircle className="w-5 h-5 text-amber-700 dark:text-amber-400 shrink-0 mt-0.5" />
           <div>
             <h2 className="text-base font-bold text-amber-950 dark:text-amber-200">
               {!settings.globalEnabled
-                ? 'Pautangan is temporarily paused department-wide'
-                : 'Pautangan access is currently disabled for your profile'}
+                ? 'Cash Assistance is temporarily paused department-wide'
+                : 'Cash Assistance access is currently restricted for your profile'}
             </h2>
             <p className="mt-1 text-sm text-amber-900 dark:text-amber-300">
-              Contact the Pantry Admin to enable Pautangan eligibility or update credit limits.
+              Contact the Pantry Admin to enable Cash Assistance eligibility or update credit limits.
             </p>
           </div>
         </div>
-      ) : (
+      ) : userEligible ? (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
           {/* Request Cash Assistance Form OR Unpaid Debt Notice */}
           {hasCurrentDebtToPay ? (
@@ -288,7 +449,7 @@ export const PautanganView: React.FC<PautanganViewProps> = ({
                 )}
                 {activeOutstanding > 0 && (
                   <div className="flex justify-between">
-                    <span className="text-stone-600 dark:text-stone-400">Active Pautangan Loan</span>
+                    <span className="text-stone-600 dark:text-stone-400">Active Cash Assistance Loan</span>
                     <span className="font-mono font-bold text-stone-900 dark:text-stone-100 tabular-nums">
                       {formatPHP(activeOutstanding, true)}
                     </span>
@@ -391,7 +552,7 @@ export const PautanganView: React.FC<PautanganViewProps> = ({
                 disabled={numericPrincipal < 100 || numericPrincipal > availableCredit}
                 className="w-full min-h-[44px] rounded-xl bg-teal-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-800 disabled:bg-stone-200 dark:disabled:bg-stone-800 disabled:text-stone-500 transition-colors cursor-pointer"
               >
-                Submit Loan Request
+                Submit Cash Assistance Request
               </button>
             </form>
           )}
@@ -403,13 +564,13 @@ export const PautanganView: React.FC<PautanganViewProps> = ({
                 Cash Assistance Payment History &amp; Term Schedule
               </h2>
               <p className="text-xs text-stone-500 dark:text-stone-400">
-                Automatically populated from your chosen loan term and cutoff dates ({settings.dueDays[0]}th &amp; {settings.dueDays[1]}th).
+                Automatically populated from your chosen term and cutoff dates ({settings.dueDays[0]}th &amp; {settings.dueDays[1]}th).
               </p>
             </div>
 
             {userLoans.length === 0 ? (
               <div className="p-8 text-center text-sm text-stone-500 dark:text-stone-400">
-                You have no active or past Pautangan loans yet.
+                You have no active or past Cash Assistance loans yet.
               </div>
             ) : (
               <div className="divide-y divide-stone-200 dark:divide-stone-800">
@@ -417,11 +578,16 @@ export const PautanganView: React.FC<PautanganViewProps> = ({
                   <div key={loan.id} className="p-5 space-y-4">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div>
-                        <div className="text-xs text-stone-500 dark:text-stone-400">
+                        <div className="flex flex-wrap items-center gap-2 text-xs text-stone-500 dark:text-stone-400">
                           <span className="font-mono font-semibold text-stone-700 dark:text-stone-200">
                             {loan.id}
-                          </span>{' '}
-                          · {loan.createdAt} · {loan.interestRate}%/mo · Chosen Term:{' '}
+                          </span>
+                          {loan.storeName && (
+                            <span className="px-2 py-0.5 rounded-md bg-teal-50 dark:bg-teal-950/60 text-teal-800 dark:text-teal-300 font-semibold">
+                              {loan.storeName}
+                            </span>
+                          )}
+                          <span>· {loan.createdAt} · {loan.interestRate}%/mo · Chosen Term:</span>
                           <strong className="text-stone-800 dark:text-stone-200">
                             {loan.months} {loan.months === 1 ? 'Month' : 'Months'}
                           </strong>
@@ -534,7 +700,7 @@ export const PautanganView: React.FC<PautanganViewProps> = ({
             )}
           </div>
         </div>
-      )}
+      ) : null}
 
       {/* Repayment Modal */}
       {repayModalLoan && (
@@ -546,7 +712,7 @@ export const PautanganView: React.FC<PautanganViewProps> = ({
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h3 className="text-lg font-bold text-stone-900 dark:text-stone-100">
-                  Repay Loan {repayModalLoan.id}
+                  Repay Cash Assistance {repayModalLoan.id}
                 </h3>
                 <p className="text-xs text-stone-500 dark:text-stone-400">
                   Remaining balance: {formatPHP(repayModalLoan.remainingBalance, true)}
@@ -640,7 +806,7 @@ export const PautanganView: React.FC<PautanganViewProps> = ({
                         onClick={() =>
                           setPreviewImage({
                             src: repayProof,
-                            title: `${selectedRepayMethod.title} Loan Repayment Receipt`,
+                            title: `${selectedRepayMethod.title} Cash Assistance Receipt`,
                             subtitle: repayRef.trim() ? `Ref: ${repayRef.trim()}` : 'Uploaded receipt preview',
                           })
                         }
@@ -650,7 +816,7 @@ export const PautanganView: React.FC<PautanganViewProps> = ({
                       >
                         <img
                           src={repayProof}
-                          alt="Loan repayment proof preview"
+                          alt="Repayment proof preview"
                           className="w-16 h-16 object-cover"
                         />
                       </button>

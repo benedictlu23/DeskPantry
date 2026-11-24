@@ -128,7 +128,7 @@ export const SignInModal: React.FC<SignInModalProps> = ({
                 Role &amp; Profile Sync
               </p>
               <p>
-                New Gmail accounts default to <span className="font-semibold">Coworker</span> role with your Gmail avatar saved automatically. Admins can assign Delivery Staff, Admin, or Pautangan access in Admin Config.
+                New Gmail accounts default to <span className="font-semibold">Coworker</span> role with your Gmail avatar saved automatically. Admins can assign Delivery Staff, Store Owner, or Admin access in Admin Config.
               </p>
             </div>
           </div>

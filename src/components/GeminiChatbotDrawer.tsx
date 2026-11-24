@@ -93,8 +93,11 @@ export const GeminiChatbotDrawer: React.FC<GeminiChatbotDrawerProps> = ({
 
     try {
       const catalogSummary = storeItems
-        .slice(0, 6)
-        .map((i) => `${i.name} (₱${i.price}, ${i.stock} left)`)
+        .slice(0, 15)
+        .map(
+          (i) =>
+            `${i.name} [${i.storeName || 'DeskPantry Flagship'}] (₱${i.price}, ${i.stock} left)`
+        )
         .join('; ');
 
       const res = await fetch('/api/chat', {

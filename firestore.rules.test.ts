@@ -4,7 +4,7 @@
  */
 export interface SecurityTestCase {
   name: string;
-  actor: { uid: string; email: string; email_verified: boolean; role?: string; pautanganEnabled?: boolean };
+  actor: { uid: string; email: string; email_verified: boolean; role?: string; cashAssistanceEnabled?: boolean };
   operation: 'get' | 'list' | 'create' | 'update' | 'delete';
   path: string;
   payload?: Record<string, unknown>;
@@ -17,15 +17,15 @@ export const DIRTY_DOZEN_TESTS: SecurityTestCase[] = [
     actor: { uid: 'u-attacker', email: 'attacker@gmail.com', email_verified: true },
     operation: 'create',
     path: '/users/u-attacker',
-    payload: { id: 'u-attacker', name: 'Attacker', email: 'attacker@gmail.com', department: 'Ops', role: 'super_admin', debtBalance: 0, pautanganEnabled: false, pautanganLimit: 0, avatarInitials: 'AT', totalSpent: 0 },
+    payload: { id: 'u-attacker', name: 'Attacker', email: 'attacker@gmail.com', department: 'Ops', role: 'super_admin', debtBalance: 0, cashAssistanceEnabled: false, cashAssistanceLimit: 0, avatarInitials: 'AT', totalSpent: 0 },
     expected: 'PERMISSION_DENIED',
   },
   {
-    name: '2. Self-grant Pautangan access on user update',
-    actor: { uid: 'u-member', email: 'member@gmail.com', email_verified: true, role: 'member', pautanganEnabled: false },
+    name: '2. Self-grant Cash Assistance access on user update',
+    actor: { uid: 'u-member', email: 'member@gmail.com', email_verified: true, role: 'member', cashAssistanceEnabled: false },
     operation: 'update',
     path: '/users/u-member',
-    payload: { pautanganEnabled: true, pautanganLimit: 50000 },
+    payload: { cashAssistanceEnabled: true, cashAssistanceLimit: 50000 },
     expected: 'PERMISSION_DENIED',
   },
   {
@@ -36,25 +36,25 @@ export const DIRTY_DOZEN_TESTS: SecurityTestCase[] = [
     expected: 'PERMISSION_DENIED',
   },
   {
-    name: '4. Restricted user reading confidential /config/pautangan',
-    actor: { uid: 'u-member', email: 'member@gmail.com', email_verified: true, role: 'member', pautanganEnabled: false },
+    name: '4. Non-owner reading confidential /storeCashAssistance/{storeId}',
+    actor: { uid: 'u-member', email: 'member@gmail.com', email_verified: true, role: 'member', cashAssistanceEnabled: false },
     operation: 'get',
-    path: '/config/pautangan',
+    path: '/storeCashAssistance/store-roastery',
     expected: 'PERMISSION_DENIED',
   },
   {
     name: '5. Unfiltered list query on /loans',
-    actor: { uid: 'u-member', email: 'member@gmail.com', email_verified: true, role: 'member', pautanganEnabled: false },
+    actor: { uid: 'u-member', email: 'member@gmail.com', email_verified: true, role: 'member', cashAssistanceEnabled: false },
     operation: 'list',
     path: '/loans',
     expected: 'PERMISSION_DENIED',
   },
   {
-    name: '6. Spoofed userId on /orders create',
-    actor: { uid: 'u-member-a', email: 'a@gmail.com', email_verified: true, role: 'member' },
-    operation: 'create',
-    path: '/orders/ORD-999',
-    payload: { id: 'ORD-999', userId: 'u-member-b', userName: 'Other', items: [], totalAmount: 50, fulfillment: 'Pickup', paymentMethod: 'Cash', status: 'Confirmed', createdAt: 'Now', orderDateIso: '2026-11-20', source: 'store', logs: [] },
+    name: '6. Cross-store item price hijack by another Store Owner',
+    actor: { uid: 'u-marco', email: 'marco.v@company.ph', email_verified: true, role: 'member' },
+    operation: 'update',
+    path: '/storeItems/item-nova-main',
+    payload: { price: 1, storeId: 'store-main', storeOwnerId: 'u-benedict' },
     expected: 'PERMISSION_DENIED',
   },
   {
@@ -77,8 +77,8 @@ export const DIRTY_DOZEN_TESTS: SecurityTestCase[] = [
     name: '9. Unverified email spoof of bootstrapped admin',
     actor: { uid: 'u-spoof', email: 'benedictlu23@gmail.com', email_verified: false },
     operation: 'update',
-    path: '/config/store',
-    payload: { deliveryFee: 0 },
+    path: '/config/platform',
+    payload: { baseStoreMonthlyFee: 0 },
     expected: 'PERMISSION_DENIED',
   },
   {

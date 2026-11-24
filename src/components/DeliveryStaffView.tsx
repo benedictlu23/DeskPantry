@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import {
+  Building2,
   CheckCircle2,
   MapPin,
   PackageCheck,
@@ -10,14 +11,27 @@ import {
 import {
   FulfillmentType,
   PaymentMethod,
+  PlatformConfig,
   StoreOrder,
+  StoreProfile,
   UserAccount,
   UserRole,
 } from '../types';
-import { formatBuyerWorkstation, formatPHP, isApprovedDeliveryOrder, isDateWithinPeriod } from '../utils/format';
+import {
+  DEFAULT_STORE_ID,
+  formatBuyerWorkstation,
+  formatPHP,
+  isApprovedDeliveryOrder,
+  isDateInCutoffWindow,
+  resolveOrderPaymentType,
+  resolveOrderStoreId,
+  resolveOrderStoreName,
+} from '../utils/format';
 
 interface DeliveryStaffViewProps {
   orders: StoreOrder[];
+  stores?: StoreProfile[];
+  platformConfig?: PlatformConfig;
   currentUser: UserAccount | null;
   currentRole: UserRole;
   onUpdateDeliveryStatus: (
@@ -28,8 +42,21 @@ interface DeliveryStaffViewProps {
   onExitPreview?: () => void;
 }
 
+interface StoreBreakdownRow {
+  storeId: string;
+  storeName: string;
+  orderCount: number;
+  deliveredCount: number;
+  collectedCash: number;
+  paidCommission: number;
+  futureCollectableCommission: number;
+  totalCommission: number;
+}
+
 export const DeliveryStaffView: React.FC<DeliveryStaffViewProps> = ({
   orders,
+  stores = [],
+  platformConfig,
   currentUser,
   currentRole,
   onUpdateDeliveryStatus,
@@ -38,7 +65,11 @@ export const DeliveryStaffView: React.FC<DeliveryStaffViewProps> = ({
   const [filter, setFilter] = useState<
     'active' | 'Pending Dispatch' | 'Out for Delivery' | 'Delivered' | 'delivery_only'
   >('active');
-  const [commissionPeriod, setCommissionPeriod] = useState<'week' | 'month' | 'year' | 'all'>('month');
+  const [storeFilter, setStoreFilter] = useState<string>('all');
+  const [commissionPeriod, setCommissionPeriod] = useState<
+    'day' | 'week' | 'month' | 'year' | 'all'
+  >('month');
+  const [cutoffFilter, setCutoffFilter] = useState<'all' | '1-15' | '16-end'>('all');
   const [banner, setBanner] = useState('');
 
   const canAccess =
@@ -46,61 +77,158 @@ export const DeliveryStaffView: React.FC<DeliveryStaffViewProps> = ({
     currentRole === UserRole.Admin ||
     currentRole === UserRole.SuperAdmin;
 
-  // Commission & Cash Collection Dashboard strictly visible ONLY to Delivery Staff & Super Admin
+  // Commission & Cash Collection Dashboard visible to Delivery Staff & Super Admin
   const canViewCommissionDashboard =
     currentRole === UserRole.DeliveryStaff || currentRole === UserRole.SuperAdmin;
 
-  const dispatchableOrders = useMemo(
-    () => orders.filter(isApprovedDeliveryOrder),
-    [orders]
-  );
+  const assignedStoreIdSet = useMemo(() => {
+    const set = new Set<string>(currentUser?.assignedStoreIds ?? []);
+    for (const s of stores) {
+      if (currentUser?.id && (s.assignedDeliveryStaffIds ?? []).includes(currentUser.id)) {
+        set.add(s.id);
+      }
+    }
+    return set;
+  }, [currentUser?.id, currentUser?.assignedStoreIds, stores]);
+
+  const dispatchableOrders = useMemo(() => {
+    const approved = orders.filter(isApprovedDeliveryOrder);
+    if (currentRole !== UserRole.DeliveryStaff) {
+      return approved;
+    }
+    const uid = currentUser?.id ?? '';
+    return approved.filter((o) => {
+      const sid = resolveOrderStoreId(o);
+      if (o.assignedRunnerId && o.assignedRunnerId === uid) return true;
+      if ((o.assignedDeliveryStaffIds ?? []).includes(uid)) return true;
+      if (assignedStoreIdSet.has(sid)) return true;
+      return false;
+    });
+  }, [orders, currentRole, currentUser?.id, assignedStoreIdSet]);
+
+  const storeOptions = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const s of stores) {
+      if (currentRole !== UserRole.DeliveryStaff || assignedStoreIdSet.has(s.id)) {
+        map.set(s.id, s.name);
+      }
+    }
+    for (const o of dispatchableOrders) {
+      const sid = resolveOrderStoreId(o);
+      if (!map.has(sid)) {
+        map.set(sid, resolveOrderStoreName(o));
+      }
+    }
+    if (map.size === 0 && stores.length > 0) {
+      map.set(stores[0].id || DEFAULT_STORE_ID, stores[0].name);
+    }
+    return Array.from(map.entries()).map(([id, name]) => ({ id, name }));
+  }, [stores, dispatchableOrders, currentRole, assignedStoreIdSet]);
+
+  const storeScopedOrders = useMemo(() => {
+    if (storeFilter === 'all') return dispatchableOrders;
+    return dispatchableOrders.filter((o) => resolveOrderStoreId(o) === storeFilter);
+  }, [dispatchableOrders, storeFilter]);
 
   const filteredOrders = useMemo(() => {
-    return dispatchableOrders.filter((o) => {
+    return storeScopedOrders.filter((o) => {
       const ds = o.deliveryStatus ?? 'Pending Dispatch';
       if (filter === 'active') return ds !== 'Delivered';
       if (filter === 'delivery_only') return o.fulfillment === FulfillmentType.Delivery;
       return ds === filter;
     });
-  }, [dispatchableOrders, filter]);
+  }, [storeScopedOrders, filter]);
 
   const periodOrders = useMemo(() => {
-    return dispatchableOrders.filter((o) =>
-      isDateWithinPeriod(o.orderDateIso, commissionPeriod)
+    return storeScopedOrders.filter((o) =>
+      isDateInCutoffWindow(o.orderDateIso, commissionPeriod, cutoffFilter)
     );
-  }, [dispatchableOrders, commissionPeriod]);
+  }, [storeScopedOrders, commissionPeriod, cutoffFilter]);
 
-  // Delivery fee is 100% delivery staff commission
-  const collectableDebtCommission = useMemo(() => {
+  const getOrderCommission = (o: StoreOrder) =>
+    o.deliveryCommission ?? o.deliveryFee ?? 0;
+
+  // Future Collectable Commission: delivery fees on unsettled Store Credit orders
+  const futureCollectableCommission = useMemo(() => {
     return periodOrders
       .filter(
         (o) =>
           o.fulfillment === FulfillmentType.Delivery &&
-          o.paymentMethod === PaymentMethod.Debt
+          resolveOrderPaymentType(o) === 'credit' &&
+          !o.debtSettled
       )
-      .reduce((sum, o) => sum + (o.deliveryCommission ?? o.deliveryFee ?? 0), 0);
+      .reduce((sum, o) => sum + getOrderCommission(o), 0);
   }, [periodOrders]);
 
+  // Paid / Non-Debt Commissions: delivery fees on Cash, E-Wallet, or Settled Credit orders
   const paidNonDebtCommission = useMemo(() => {
     return periodOrders
       .filter(
         (o) =>
           o.fulfillment === FulfillmentType.Delivery &&
-          o.paymentMethod !== PaymentMethod.Debt
+          (resolveOrderPaymentType(o) !== 'credit' || Boolean(o.debtSettled))
       )
-      .reduce((sum, o) => sum + (o.deliveryCommission ?? o.deliveryFee ?? 0), 0);
+      .reduce((sum, o) => sum + getOrderCommission(o), 0);
   }, [periodOrders]);
 
   const totalCashCollected = useMemo(() => {
     return periodOrders
-      .filter((o) => o.paymentMethod === PaymentMethod.Cash && o.cashCollected)
+      .filter(
+        (o) =>
+          (o.paymentMethod === PaymentMethod.Cash || resolveOrderPaymentType(o) === 'cash') &&
+          o.cashCollected
+      )
       .reduce((sum, o) => sum + o.totalAmount, 0);
   }, [periodOrders]);
 
   const pendingCashCollection = useMemo(() => {
     return periodOrders
-      .filter((o) => o.paymentMethod === PaymentMethod.Cash && !o.cashCollected)
+      .filter(
+        (o) =>
+          (o.paymentMethod === PaymentMethod.Cash || resolveOrderPaymentType(o) === 'cash') &&
+          !o.cashCollected
+      )
       .reduce((sum, o) => sum + o.totalAmount, 0);
+  }, [periodOrders]);
+
+  const perStoreBreakdown = useMemo<StoreBreakdownRow[]>(() => {
+    const map = new Map<string, StoreBreakdownRow>();
+    for (const o of periodOrders) {
+      const sid = resolveOrderStoreId(o);
+      const sname = resolveOrderStoreName(o);
+      const existing = map.get(sid) ?? {
+        storeId: sid,
+        storeName: sname,
+        orderCount: 0,
+        deliveredCount: 0,
+        collectedCash: 0,
+        paidCommission: 0,
+        futureCollectableCommission: 0,
+        totalCommission: 0,
+      };
+      existing.orderCount += 1;
+      if (o.deliveryStatus === 'Delivered') existing.deliveredCount += 1;
+      const isCash =
+        o.paymentMethod === PaymentMethod.Cash || resolveOrderPaymentType(o) === 'cash';
+      if (isCash && o.cashCollected) {
+        existing.collectedCash += o.totalAmount;
+      }
+      if (o.fulfillment === FulfillmentType.Delivery) {
+        const fee = getOrderCommission(o);
+        const isUnsettledCredit =
+          resolveOrderPaymentType(o) === 'credit' && !o.debtSettled;
+        if (isUnsettledCredit) {
+          existing.futureCollectableCommission += fee;
+        } else {
+          existing.paidCommission += fee;
+        }
+        existing.totalCommission += fee;
+      }
+      map.set(sid, existing);
+    }
+    return Array.from(map.values()).sort(
+      (a, b) => b.totalCommission - a.totalCommission
+    );
   }, [periodOrders]);
 
   if (!canAccess) {
@@ -126,13 +254,13 @@ export const DeliveryStaffView: React.FC<DeliveryStaffViewProps> = ({
     );
   }
 
-  const pendingCount = dispatchableOrders.filter(
+  const pendingCount = storeScopedOrders.filter(
     (o) => (o.deliveryStatus ?? 'Pending Dispatch') === 'Pending Dispatch'
   ).length;
-  const outCount = dispatchableOrders.filter(
+  const outCount = storeScopedOrders.filter(
     (o) => o.deliveryStatus === 'Out for Delivery'
   ).length;
-  const deliveredCount = dispatchableOrders.filter(
+  const deliveredCount = storeScopedOrders.filter(
     (o) => o.deliveryStatus === 'Delivered'
   ).length;
 
@@ -140,6 +268,8 @@ export const DeliveryStaffView: React.FC<DeliveryStaffViewProps> = ({
     setBanner(msg);
     setTimeout(() => setBanner(''), 4500);
   };
+
+  const commissionRateLabel = platformConfig?.deliveryCommissionRate ?? 100;
 
   return (
     <div className="space-y-6">
@@ -149,8 +279,29 @@ export const DeliveryStaffView: React.FC<DeliveryStaffViewProps> = ({
             Delivery Staff Dispatch &amp; Commissions
           </h1>
           <p className="mt-1 text-sm text-stone-600 dark:text-stone-400">
-            Runner: <strong className="text-stone-900 dark:text-stone-100">{currentUser?.name ?? 'Delivery Staff'}</strong> · Delivery fees go 100% to delivery staff commissions.
+            Runner:{' '}
+            <strong className="text-stone-900 dark:text-stone-100">
+              {currentUser?.name ?? 'Delivery Staff'}
+            </strong>{' '}
+            · Delivery fees credit {commissionRateLabel}% to delivery staff commissions across assigned stores.
           </p>
+        </div>
+
+        <div className="flex items-center gap-2 shrink-0">
+          <Building2 className="w-4 h-4 text-teal-700 dark:text-teal-400" />
+          <select
+            value={storeFilter}
+            onChange={(e) => setStoreFilter(e.target.value)}
+            aria-label="Filter delivery orders by store"
+            className="min-h-[40px] rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-[#121D1B] px-3 py-1.5 text-xs font-semibold text-stone-800 dark:text-stone-100"
+          >
+            <option value="all">All Assigned Stores ({storeOptions.length})</option>
+            {storeOptions.map((st) => (
+              <option key={st.id} value={st.id}>
+                {st.name}
+              </option>
+            ))}
+          </select>
         </div>
       </div>
 
@@ -164,83 +315,151 @@ export const DeliveryStaffView: React.FC<DeliveryStaffViewProps> = ({
       {/* Delivery Staff & Super Admin Exclusive Commission + Cash Collection Dashboard */}
       {canViewCommissionDashboard && (
         <section className="rounded-2xl border border-teal-200 dark:border-teal-800/70 bg-teal-50/40 dark:bg-teal-950/25 p-5 sm:p-6 space-y-5">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
             <div className="flex items-center gap-2.5">
               <div className="w-9 h-9 rounded-xl bg-teal-700 text-white flex items-center justify-center shrink-0">
                 <Wallet className="w-4 h-4" />
               </div>
               <div>
                 <h2 className="text-base font-bold text-stone-900 dark:text-stone-100">
-                  Delivery Staff Commission &amp; Cash Collection Dashboard
+                  Multi-Store Commission &amp; Cash Collection Dashboard
                 </h2>
                 <p className="text-xs text-stone-600 dark:text-stone-400">
-                  Visible only to Delivery Staff &amp; Super Admin · Delivery fee = 100% delivery staff commission.
+                  Filter by period and cutoff window (1st–15th or 16th–End of Month).
                 </p>
               </div>
             </div>
 
-            <div className="flex items-center gap-1 p-1 rounded-xl bg-white dark:bg-[#121D1B] border border-stone-200 dark:border-stone-800 self-start">
-              {(
-                [
-                  { id: 'week', label: 'Week' },
-                  { id: 'month', label: 'Month' },
-                  { id: 'year', label: 'Year' },
-                  { id: 'all', label: 'All' },
-                ] as const
-              ).map((p) => (
-                <button
-                  key={p.id}
-                  type="button"
-                  onClick={() => setCommissionPeriod(p.id)}
-                  className={`min-h-[34px] px-3 py-1 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
-                    commissionPeriod === p.id
-                      ? 'bg-teal-700 text-white'
-                      : 'text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white'
-                  }`}
-                >
-                  {p.label}
-                </button>
-              ))}
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex items-center gap-1 p-1 rounded-xl bg-white dark:bg-[#121D1B] border border-stone-200 dark:border-stone-800">
+                {(
+                  [
+                    { id: 'day', label: 'Today' },
+                    { id: 'week', label: 'Week' },
+                    { id: 'month', label: 'Month' },
+                    { id: 'year', label: 'Year' },
+                    { id: 'all', label: 'All' },
+                  ] as const
+                ).map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => setCommissionPeriod(p.id)}
+                    className={`min-h-[32px] px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                      commissionPeriod === p.id
+                        ? 'bg-teal-700 text-white'
+                        : 'text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white'
+                    }`}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+
+              <select
+                value={cutoffFilter}
+                onChange={(e) => setCutoffFilter(e.target.value as typeof cutoffFilter)}
+                aria-label="Filter commission by payroll cutoff window"
+                className="min-h-[40px] rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] px-3 text-xs font-semibold text-stone-700 dark:text-stone-200"
+              >
+                <option value="all">Cutoff: Full Period</option>
+                <option value="1-15">Cutoff: 1st – 15th</option>
+                <option value="16-end">Cutoff: 16th – End</option>
+              </select>
             </div>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] p-4">
               <div className="text-xs text-stone-500 dark:text-stone-400">
-                Collectable Commission on Delivery Fee (Debt)
-              </div>
-              <div className="mt-1 text-2xl font-bold text-amber-700 dark:text-amber-400 font-mono tabular-nums">
-                {formatPHP(collectableDebtCommission, true)}
-              </div>
-              <div className="mt-0.5 text-xs text-stone-500 dark:text-stone-400">
-                Delivery fees on Store Credit (Debt) orders
-              </div>
-            </div>
-
-            <div className="rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] p-4">
-              <div className="text-xs text-stone-500 dark:text-stone-400">
-                Total Collection on Cash ({commissionPeriod})
+                Collected Cash &amp; Paid Commissions
               </div>
               <div className="mt-1 text-2xl font-bold text-emerald-700 dark:text-emerald-400 font-mono tabular-nums">
-                {formatPHP(totalCashCollected, true)}
+                {formatPHP(paidNonDebtCommission, true)}
               </div>
               <div className="mt-0.5 text-xs text-stone-500 dark:text-stone-400 tabular-nums">
-                Pending COD to collect: {formatPHP(pendingCashCollection, true)}
+                COD Collected: {formatPHP(totalCashCollected, true)} · Pending COD:{' '}
+                {formatPHP(pendingCashCollection, true)}
               </div>
             </div>
 
             <div className="rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] p-4">
               <div className="text-xs text-stone-500 dark:text-stone-400">
-                Total Delivery Commission Earned
+                Future Collectable Commission
+              </div>
+              <div className="mt-1 text-2xl font-bold text-amber-700 dark:text-amber-400 font-mono tabular-nums">
+                {formatPHP(futureCollectableCommission, true)}
+              </div>
+              <div className="mt-0.5 text-xs text-stone-500 dark:text-stone-400">
+                Unsettled Store Credit delivery fees
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] p-4">
+              <div className="text-xs text-stone-500 dark:text-stone-400">
+                Total Period Commission
               </div>
               <div className="mt-1 text-2xl font-bold text-teal-700 dark:text-teal-400 font-mono tabular-nums">
-                {formatPHP(collectableDebtCommission + paidNonDebtCommission, true)}
+                {formatPHP(futureCollectableCommission + paidNonDebtCommission, true)}
               </div>
               <div className="mt-0.5 text-xs text-stone-500 dark:text-stone-400 tabular-nums">
-                Cash/Digital Fee: {formatPHP(paidNonDebtCommission)} · Debt Fee: {formatPHP(collectableDebtCommission)}
+                {periodOrders.length} orders across {perStoreBreakdown.length} store
+                {perStoreBreakdown.length === 1 ? '' : 's'}
               </div>
             </div>
           </div>
+
+          {/* Per-Store Earnings Breakdown */}
+          {perStoreBreakdown.length > 0 && (
+            <div className="rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] overflow-hidden">
+              <div className="px-4 py-3 border-b border-stone-200 dark:border-stone-800 bg-stone-50/70 dark:bg-[#172523] flex items-center justify-between">
+                <span className="text-xs font-bold text-stone-800 dark:text-stone-200">
+                  Per-Store Earnings Breakdown
+                </span>
+                <span className="text-[11px] text-stone-500 dark:text-stone-400">
+                  {commissionPeriod.toUpperCase()} · {cutoffFilter === 'all' ? 'All Days' : cutoffFilter}
+                </span>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr className="border-b border-stone-200 dark:border-stone-800 text-stone-500 dark:text-stone-400">
+                      <th className="py-2.5 px-4 font-semibold">Store</th>
+                      <th className="py-2.5 px-4 font-semibold text-right">Deliveries</th>
+                      <th className="py-2.5 px-4 font-semibold text-right">COD Collected</th>
+                      <th className="py-2.5 px-4 font-semibold text-right">Paid Comm.</th>
+                      <th className="py-2.5 px-4 font-semibold text-right">Future Collectable</th>
+                      <th className="py-2.5 px-4 font-semibold text-right">Total Comm.</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-stone-200 dark:divide-stone-800">
+                    {perStoreBreakdown.map((row) => (
+                      <tr key={row.storeId}>
+                        <td className="py-2.5 px-4 font-semibold text-stone-900 dark:text-stone-100">
+                          {row.storeName}
+                        </td>
+                        <td className="py-2.5 px-4 text-right font-mono tabular-nums text-stone-600 dark:text-stone-300">
+                          {row.deliveredCount}/{row.orderCount}
+                        </td>
+                        <td className="py-2.5 px-4 text-right font-mono tabular-nums text-emerald-700 dark:text-emerald-400">
+                          {formatPHP(row.collectedCash, true)}
+                        </td>
+                        <td className="py-2.5 px-4 text-right font-mono tabular-nums text-stone-900 dark:text-stone-100">
+                          {formatPHP(row.paidCommission, true)}
+                        </td>
+                        <td className="py-2.5 px-4 text-right font-mono tabular-nums text-amber-700 dark:text-amber-400">
+                          {formatPHP(row.futureCollectableCommission, true)}
+                        </td>
+                        <td className="py-2.5 px-4 text-right font-mono font-bold tabular-nums text-teal-700 dark:text-teal-400">
+                          {formatPHP(row.totalCommission, true)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </section>
       )}
 
@@ -301,7 +520,7 @@ export const DeliveryStaffView: React.FC<DeliveryStaffViewProps> = ({
             No orders in this queue.
           </p>
           <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">
-            Approved Desk Delivery orders appear here once confirmed &amp; released by Admin on Sales Order. Pickup and unapproved orders never enter the dispatch queue.
+            Approved Desk Delivery orders from your assigned stores appear here once confirmed &amp; released on Sales Order. Pick Up and unapproved orders never enter the dispatch queue.
           </p>
         </div>
       ) : (
@@ -309,7 +528,8 @@ export const DeliveryStaffView: React.FC<DeliveryStaffViewProps> = ({
           {filteredOrders.map((order) => {
             const ds = order.deliveryStatus ?? 'Pending Dispatch';
             const isCash = order.paymentMethod === PaymentMethod.Cash;
-            const fee = order.deliveryCommission ?? order.deliveryFee ?? 0;
+            const fee = getOrderCommission(order);
+            const storeLabel = resolveOrderStoreName(order);
             return (
               <div
                 key={order.id}
@@ -320,11 +540,14 @@ export const DeliveryStaffView: React.FC<DeliveryStaffViewProps> = ({
                     <span className="font-mono font-bold text-stone-900 dark:text-stone-100">
                       {order.id}
                     </span>
+                    <span className="px-2 py-0.5 rounded-md bg-teal-50 dark:bg-teal-950/60 text-teal-800 dark:text-teal-300 font-semibold">
+                      {storeLabel}
+                    </span>
                     <span aria-hidden="true">·</span>
                     <span>{order.createdAt}</span>
                     <span aria-hidden="true">·</span>
                     <span className="font-semibold text-stone-700 dark:text-stone-200">
-                      {order.fulfillment}
+                      {order.fulfillment === FulfillmentType.Pickup ? 'Pick Up' : 'Delivery'}
                     </span>
                     <span aria-hidden="true">·</span>
                     <span
@@ -385,7 +608,6 @@ export const DeliveryStaffView: React.FC<DeliveryStaffViewProps> = ({
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2 shrink-0">
-
                   {ds === 'Pending Dispatch' && (
                     <button
                       type="button"

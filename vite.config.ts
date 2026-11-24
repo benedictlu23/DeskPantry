@@ -17,7 +17,7 @@ export default defineConfig(() => {
           id: '/',
           name: 'DeskPantry — Office Store & Hub',
           short_name: 'DeskPantry',
-          description: 'Department office store, coworker marketplace, Pautangan cash assistance, and community hub.',
+          description: 'Multi-store office pantry marketplace, Cash Assistance add-on, coworker hub, and delivery tracking.',
           theme_color: '#0F766E',
           background_color: '#F7F7F5',
           display: 'standalone',

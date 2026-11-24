@@ -3,8 +3,13 @@ import {
   FulfillmentType,
   LoanInstallment,
   PaymentMethod,
+  StoreCustomerCredit,
   StoreOrder,
 } from '../types';
+
+export const DEFAULT_STORE_ID = 'store-main';
+export const DEFAULT_STORE_NAME = 'DeskPantry Flagship';
+export const DEFAULT_STORE_OWNER_ID = 'u-benedict';
 
 export function formatPHP(amount: number, showDecimals = false): string {
   const value = Number.isFinite(amount) ? amount : 0;
@@ -14,6 +19,23 @@ export function formatPHP(amount: number, showDecimals = false): string {
     minimumFractionDigits: showDecimals ? 2 : 0,
     maximumFractionDigits: showDecimals ? 2 : 0,
   }).format(value);
+}
+
+export function resolveOrderStoreId(order: Pick<StoreOrder, 'storeId'>): string {
+  return order.storeId?.trim() || DEFAULT_STORE_ID;
+}
+
+export function resolveOrderStoreName(order: Pick<StoreOrder, 'storeName'>): string {
+  return order.storeName?.trim() || DEFAULT_STORE_NAME;
+}
+
+export function resolveOrderPaymentType(
+  order: Pick<StoreOrder, 'paymentType' | 'paymentMethod'>
+): 'cash' | 'credit' | 'ewallet' {
+  if (order.paymentType) return order.paymentType;
+  if (order.paymentMethod === PaymentMethod.Debt) return 'credit';
+  if (order.paymentMethod === PaymentMethod.Cash) return 'cash';
+  return 'ewallet';
 }
 
 export function isOrderPendingAdminConfirmation(order: StoreOrder): boolean {
@@ -66,6 +88,9 @@ export function formatBuyerWorkstation(order: {
 }
 
 export function getOrderItemsSubtotal(order: StoreOrder): number {
+  if (typeof order.subtotal === 'number' && Number.isFinite(order.subtotal)) {
+    return order.subtotal;
+  }
   return order.items.reduce((sum, li) => sum + li.unitPrice * li.quantity, 0);
 }
 
@@ -154,12 +179,19 @@ export function buildLoanInstallments(
 
 export function isDateWithinPeriod(
   isoDate: string,
-  period: 'week' | 'month' | 'year' | 'all'
+  period: 'day' | 'week' | 'month' | 'year' | 'all'
 ): boolean {
   if (period === 'all') return true;
   const target = new Date(isoDate);
   if (Number.isNaN(target.getTime())) return true;
   const now = new Date();
+  if (period === 'day') {
+    return (
+      target.getFullYear() === now.getFullYear() &&
+      target.getMonth() === now.getMonth() &&
+      target.getDate() === now.getDate()
+    );
+  }
   const diffMs = now.getTime() - target.getTime();
   const diffDays = diffMs / (1000 * 60 * 60 * 24);
   if (period === 'week') return diffDays <= 7 && diffDays >= -1;
@@ -173,4 +205,93 @@ export function isDateWithinPeriod(
     return target.getFullYear() === now.getFullYear();
   }
   return true;
+}
+
+export function isDateInCutoffWindow(
+  isoDate: string,
+  period: 'day' | 'week' | 'month' | 'year' | 'all',
+  cutoff: 'all' | '1-15' | '16-end'
+): boolean {
+  if (!isDateWithinPeriod(isoDate, period)) return false;
+  if (cutoff === 'all') return true;
+  const target = new Date(isoDate);
+  if (Number.isNaN(target.getTime())) return true;
+  const dom = target.getDate();
+  return cutoff === '1-15' ? dom <= 15 : dom >= 16;
+}
+
+export interface BuyerStoreDebtEntry {
+  storeId: string;
+  storeName: string;
+  storeOwnerId: string;
+  balance: number;
+  creditOrdersRemaining: number;
+}
+
+export function computeBuyerStoreDebts(params: {
+  userId: string;
+  fallbackDebtBalance: number;
+  storeDebtBalances?: Record<string, number>;
+  customerCredits: StoreCustomerCredit[];
+  orders: StoreOrder[];
+  stores: { id: string; name: string; ownerId: string }[];
+}): { totalDebt: number; byStore: BuyerStoreDebtEntry[] } {
+  const { userId, fallbackDebtBalance, storeDebtBalances, customerCredits, orders, stores } = params;
+  const storeLookup = new Map(stores.map((s) => [s.id, s]));
+  const map = new Map<string, BuyerStoreDebtEntry>();
+
+  const ensureEntry = (storeId: string) => {
+    const existing = map.get(storeId);
+    if (existing) return existing;
+    const store = storeLookup.get(storeId);
+    const entry: BuyerStoreDebtEntry = {
+      storeId,
+      storeName: store?.name || (storeId === DEFAULT_STORE_ID ? DEFAULT_STORE_NAME : storeId),
+      storeOwnerId: store?.ownerId || DEFAULT_STORE_OWNER_ID,
+      balance: 0,
+      creditOrdersRemaining: 0,
+    };
+    map.set(storeId, entry);
+    return entry;
+  };
+
+  const userCredits = customerCredits.filter((c) => c.userId === userId);
+  for (const credit of userCredits) {
+    const entry = ensureEntry(credit.storeId);
+    if (credit.storeName) entry.storeName = credit.storeName;
+    if (credit.storeOwnerId) entry.storeOwnerId = credit.storeOwnerId;
+    entry.balance = Math.max(0, Number(credit.balance ?? 0));
+  }
+
+  if (storeDebtBalances) {
+    for (const [storeId, bal] of Object.entries(storeDebtBalances)) {
+      if (!userCredits.some((c) => c.storeId === storeId)) {
+        const entry = ensureEntry(storeId);
+        entry.balance = Math.max(0, Number(bal ?? 0));
+      }
+    }
+  }
+
+  for (const ord of orders) {
+    if (ord.userId !== userId || ord.source !== 'store') continue;
+    if (ord.paymentMethod !== PaymentMethod.Debt || ord.status === 'Rejected') continue;
+    const sid = resolveOrderStoreId(ord);
+    const entry = ensureEntry(sid);
+    entry.creditOrdersRemaining += getOrderRemainingDebt(ord);
+  }
+
+  if (map.size === 0 && fallbackDebtBalance > 0) {
+    const entry = ensureEntry(DEFAULT_STORE_ID);
+    entry.balance = Math.max(0, fallbackDebtBalance);
+  }
+
+  const byStore = Array.from(map.values()).filter(
+    (entry) => entry.balance > 0 || entry.creditOrdersRemaining > 0
+  );
+  const totalDebt =
+    byStore.length > 0
+      ? byStore.reduce((sum, entry) => sum + entry.balance, 0)
+      : Math.max(0, fallbackDebtBalance);
+
+  return { totalDebt, byStore };
 }

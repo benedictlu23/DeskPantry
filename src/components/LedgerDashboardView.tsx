@@ -20,16 +20,24 @@ import {
   PaymentMethodConfig,
   PaymentProof,
   SellerConfig,
+  StoreCustomerCredit,
   StoreOrder,
+  StoreProfile,
   UserAccount,
   UserRole,
 } from '../types';
 import {
+  BuyerStoreDebtEntry,
+  computeBuyerStoreDebts,
+  DEFAULT_STORE_ID,
+  DEFAULT_STORE_NAME,
+  DEFAULT_STORE_OWNER_ID,
   formatPHP,
   getOrderItemsSubtotal,
   getOrderRemainingDebt,
   isDateWithinPeriod,
   isOrderPendingSellerConfirmation,
+  resolveOrderStoreName,
 } from '../utils/format';
 import { compressImageFileToDataUrl, isValidUploadedReceipt } from '../utils/image';
 import { ImagePreviewModal, ImagePreviewTarget } from './ImagePreviewModal';
@@ -44,11 +52,16 @@ interface LedgerDashboardViewProps {
   loans: LoanRecord[];
   proofs: PaymentProof[];
   paymentMethods: PaymentMethodConfig[];
+  stores?: StoreProfile[];
+  storeCustomerCredits?: StoreCustomerCredit[];
   ownerTotalCommission: number;
   dueDays: [number, number];
   nextDueLabel: string;
   onOpenSignIn: () => void;
   onSubmitDebtProof: (payload: {
+    storeId: string;
+    storeName: string;
+    storeOwnerId?: string;
     amount: number;
     channel: string;
     referenceNo: string;
@@ -87,6 +100,8 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
   loans,
   proofs,
   paymentMethods,
+  stores = [],
+  storeCustomerCredits = [],
   ownerTotalCommission,
   dueDays,
   nextDueLabel,
@@ -96,16 +111,22 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
   onFetchSellerConfig,
 }) => {
   const [activeTab, setActiveTab] = useState<'orders' | 'receipts'>('orders');
-  const [showPayModal, setShowPayModal] = useState(false);
+  const [payingStore, setPayingStore] = useState<BuyerStoreDebtEntry | null>(null);
   const [payAmount, setPayAmount] = useState('');
 
-  const digitalMethods = useMemo(
-    () => paymentMethods.filter((m) => m.enabled && m.type === 'digital'),
-    [paymentMethods]
-  );
+  const activeStoreDigitalMethods = useMemo(() => {
+    const storeProfile = payingStore
+      ? stores.find((s) => s.id === payingStore.storeId)
+      : undefined;
+    const sourceMethods =
+      storeProfile && storeProfile.paymentMethods.length > 0
+        ? storeProfile.paymentMethods
+        : paymentMethods;
+    return sourceMethods.filter((m) => m.enabled && m.type === 'digital');
+  }, [payingStore, stores, paymentMethods]);
 
   const [payChannelId, setPayChannelId] = useState<string>(
-    digitalMethods[0]?.id ?? 'pm-gcash'
+    paymentMethods.find((m) => m.enabled && m.type === 'digital')?.id ?? 'pm-gcash'
   );
   const [payRef, setPayRef] = useState('');
   const [payImage, setPayImage] = useState('');
@@ -231,6 +252,20 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
     [sellerDebtGroups]
   );
 
+  const storeDebtSummary = useMemo(() => {
+    if (!currentUser) return { totalDebt: 0, byStore: [] as BuyerStoreDebtEntry[] };
+    return computeBuyerStoreDebts({
+      userId: currentUser.id,
+      fallbackDebtBalance: currentUser.debtBalance,
+      storeDebtBalances: currentUser.storeDebtBalances,
+      customerCredits: storeCustomerCredits,
+      orders,
+      stores,
+    });
+  }, [currentUser, storeCustomerCredits, orders, stores]);
+
+  const totalUserStoreDebt = storeDebtSummary.totalDebt;
+
   const userProofs = currentUser ? proofs.filter((p) => p.userId === currentUser.id) : [];
   const pendingSellerProofTotal = useMemo(
     () =>
@@ -246,12 +281,11 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
     .filter((l) => l.status === 'Active')
     .reduce((s, l) => s + l.remainingBalance, 0);
 
-  const totalOwed =
-    (currentUser?.debtBalance ?? 0) + totalCommunitySellerDebt + userActiveLoanBal;
+  const totalOwed = totalUserStoreDebt + totalCommunitySellerDebt + userActiveLoanBal;
   const pendingProofsForUser = userProofs.filter((p) => p.status === 'pending').length;
 
   const selectedDigitalMethod =
-    digitalMethods.find((m) => m.id === payChannelId) ?? digitalMethods[0];
+    activeStoreDigitalMethods.find((m) => m.id === payChannelId) ?? activeStoreDigitalMethods[0];
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -298,7 +332,7 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
   const handleProofSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const amt = Number(payAmount) || 0;
-    if (amt <= 0 || !payRef.trim() || !selectedDigitalMethod) {
+    if (amt <= 0 || !payRef.trim() || !selectedDigitalMethod || !payingStore) {
       setPayError('Enter a valid amount and reference number.');
       return;
     }
@@ -306,28 +340,47 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
       setPayError('Please upload a valid payment receipt image.');
       return;
     }
+    const targetStoreName = payingStore.storeName;
     onSubmitDebtProof({
+      storeId: payingStore.storeId,
+      storeName: targetStoreName,
+      storeOwnerId: payingStore.storeOwnerId,
       amount: amt,
       channel: selectedDigitalMethod.title,
       referenceNo: payRef.trim(),
       imageDataUrl: payImage,
     });
-    setShowPayModal(false);
+    setPayingStore(null);
     setPayAmount('');
     setPayRef('');
     setPayImage('');
     setPayError('');
     setActiveTab('receipts');
     setBanner(
-      `Store payment receipt sent! (${selectedDigitalMethod.title} · ${formatPHP(amt, true)}). Store Admin will verify and update your store debt balance.`
+      `Payment receipt sent to ${targetStoreName}! (${selectedDigitalMethod.title} · ${formatPHP(amt, true)}). Store Owner/Admin will verify and update your balance for that store.`
     );
     setTimeout(() => setBanner(''), 5500);
   };
 
-  const openPayModalWithAmount = (amount: number) => {
-    setPayAmount(String(Math.max(0, amount)));
+  const openPayStoreModal = (entry?: BuyerStoreDebtEntry) => {
+    const fallbackStore = stores[0];
+    const target: BuyerStoreDebtEntry = entry ?? {
+      storeId: fallbackStore?.id || DEFAULT_STORE_ID,
+      storeName: fallbackStore?.name || DEFAULT_STORE_NAME,
+      storeOwnerId: fallbackStore?.ownerId || DEFAULT_STORE_OWNER_ID,
+      balance: totalUserStoreDebt,
+      creditOrdersRemaining: totalUserStoreDebt,
+    };
+    const storeProfile = stores.find((s) => s.id === target.storeId);
+    const firstDigital = (
+      storeProfile && storeProfile.paymentMethods.length > 0
+        ? storeProfile.paymentMethods
+        : paymentMethods
+    ).find((m) => m.enabled && m.type === 'digital');
+    if (firstDigital) setPayChannelId(firstDigital.id);
+    setPayingStore(target);
+    setPayAmount(String(Math.max(0, target.balance)));
     setPayError('');
-    setShowPayModal(true);
   };
 
   const openPaySellerModal = (group: SellerDebtGroup) => {
@@ -423,15 +476,15 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
         <button
           type="button"
           onClick={() =>
-            currentUser.debtBalance === 0 && sellerDebtGroups.length > 0
+            totalUserStoreDebt === 0 && sellerDebtGroups.length > 0
               ? openPaySellerModal(sellerDebtGroups[0])
-              : openPayModalWithAmount(currentUser.debtBalance)
+              : openPayStoreModal(storeDebtSummary.byStore[0])
           }
           className="min-h-[44px] inline-flex items-center justify-center gap-2 rounded-xl bg-teal-700 px-5 py-2.5 text-sm font-semibold text-white hover:bg-teal-800 transition-colors shrink-0 cursor-pointer"
         >
           <CreditCard className="w-4 h-4" />
           <span>
-            {currentUser.debtBalance === 0 && sellerDebtGroups.length > 0
+            {totalUserStoreDebt === 0 && sellerDebtGroups.length > 0
               ? 'Pay Community Seller'
               : 'Pay Store Debt'}
           </span>
@@ -452,10 +505,10 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
         </div>
       )}
 
-      {/* Separated Summary Strip: Store Debt vs Community Seller Debt vs Loan */}
+      {/* Separated Summary Strip: Store Debt vs Community Seller Debt vs Cash Assistance */}
       <div
         className={`grid grid-cols-1 sm:grid-cols-2 ${
-          currentUser.pautanganEnabled || userActiveLoanBal > 0
+          currentUser.cashAssistanceEnabled || userActiveLoanBal > 0
             ? 'lg:grid-cols-5'
             : 'lg:grid-cols-4'
         } gap-3.5 sm:gap-4`}
@@ -464,30 +517,32 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
         <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] p-4 sm:p-5 flex flex-col justify-between gap-3">
           <div>
             <div className="text-xs font-semibold text-stone-500 dark:text-stone-400">
-              1. Storefront Debt (Store)
+              1. Storefront Debt (Stores)
             </div>
             <div
               className={`mt-1.5 text-2xl font-extrabold font-mono tabular-nums ${
-                currentUser.debtBalance > 0
+                totalUserStoreDebt > 0
                   ? 'text-amber-600 dark:text-amber-400'
                   : 'text-emerald-600 dark:text-emerald-400'
               }`}
             >
-              {formatPHP(currentUser.debtBalance, true)}
+              {formatPHP(totalUserStoreDebt, true)}
             </div>
             <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">
-              {currentUser.debtBalance > 0
-                ? `Official pantry orders due ${nextDueLabel}.`
-                : 'All paid! Nothing owed to the store.'}
+              {totalUserStoreDebt > 0
+                ? `${storeDebtSummary.byStore.length || 1} store${
+                    storeDebtSummary.byStore.length === 1 ? '' : 's'
+                  } due ${nextDueLabel}.`
+                : 'All paid! Nothing owed to any store.'}
             </p>
           </div>
-          {currentUser.debtBalance > 0 && (
+          {totalUserStoreDebt > 0 && (
             <button
               type="button"
-              onClick={() => openPayModalWithAmount(currentUser.debtBalance)}
+              onClick={() => openPayStoreModal(storeDebtSummary.byStore[0])}
               className="w-full min-h-[36px] rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-800 dark:text-amber-300 text-xs font-bold cursor-pointer"
             >
-              Pay Store ({formatPHP(currentUser.debtBalance)})
+              Pay {storeDebtSummary.byStore[0]?.storeName || 'Store'} ({formatPHP(storeDebtSummary.byStore[0]?.balance ?? totalUserStoreDebt)})
             </button>
           )}
         </div>
@@ -520,19 +575,19 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
           </div>
         </div>
 
-        {/* Card 3: Cash Loan (only shown when Pautangan is enabled for user or user has an active loan) */}
-        {(currentUser.pautanganEnabled || userActiveLoanBal > 0) && (
+        {/* Card 3: Cash Assistance Balance */}
+        {(currentUser.cashAssistanceEnabled || userActiveLoanBal > 0) && (
           <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] p-4 sm:p-5">
             <div className="text-xs font-semibold text-stone-500 dark:text-stone-400">
-              3. Cash Loan Left (Pautangan)
+              3. Cash Assistance Left
             </div>
             <div className="mt-1.5 text-2xl font-extrabold text-stone-900 dark:text-stone-100 font-mono tabular-nums">
               {formatPHP(userActiveLoanBal, true)}
             </div>
             <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">
               {userActiveLoanBal > 0
-                ? `From your ${formatPHP(currentUser.pautanganLimit)} loan limit.`
-                : `No active cash loan. Limit: ${formatPHP(currentUser.pautanganLimit)}.`}
+                ? `From your ${formatPHP(currentUser.cashAssistanceLimit)} limit.`
+                : `No active Cash Assistance. Limit: ${formatPHP(currentUser.cashAssistanceLimit)}.`}
             </p>
           </div>
         )}
@@ -546,7 +601,7 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
             {formatPHP(totalOwed, true)}
           </div>
           <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">
-            Store + community sellers{userActiveLoanBal > 0 ? ' + loan' : ''}
+            Stores + community sellers{userActiveLoanBal > 0 ? ' + Cash Assistance' : ''}
           </p>
         </div>
 
@@ -565,6 +620,76 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
           </p>
         </div>
       </div>
+
+      {/* Storefront Debt Breakdown by Store (Isolated per storeId) */}
+      {storeDebtSummary.byStore.length > 0 && (
+        <div className="rounded-2xl border border-teal-200 dark:border-teal-800/70 bg-white dark:bg-[#121D1B] overflow-hidden">
+          <div className="px-5 py-4 border-b border-stone-200 dark:border-stone-800 bg-teal-50/50 dark:bg-teal-950/25 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="text-sm font-bold text-stone-900 dark:text-stone-100">
+                Storefront Debt by Store (Pay Separately)
+              </h2>
+              <p className="text-xs text-stone-600 dark:text-stone-400">
+                Each store maintains its own credit ledger. Settling one store never alters your balance at another store.
+              </p>
+            </div>
+            <span className="text-xs font-bold font-mono tabular-nums text-teal-800 dark:text-teal-300">
+              Total Store Credit: {formatPHP(totalUserStoreDebt, true)}
+            </span>
+          </div>
+          <div className="divide-y divide-stone-200 dark:divide-stone-800">
+            {storeDebtSummary.byStore.map((entry) => {
+              const pendingStoreProofs = userProofs.filter(
+                (p) =>
+                  p.purpose === 'Store Debt Settlement' &&
+                  (p.storeId || DEFAULT_STORE_ID) === entry.storeId &&
+                  p.status === 'pending'
+              );
+              const pendingStoreAmt = pendingStoreProofs.reduce((s, p) => s + p.amount, 0);
+              return (
+                <div
+                  key={entry.storeId}
+                  className="p-4 sm:px-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                >
+                  <div className="space-y-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-bold text-stone-900 dark:text-stone-100">
+                        {entry.storeName}
+                      </span>
+                      {pendingStoreAmt > 0 && (
+                        <span className="px-2 py-0.5 rounded-full bg-teal-100 dark:bg-teal-950/60 text-teal-800 dark:text-teal-300 text-[11px] font-semibold">
+                          Awaiting store verification: {formatPHP(pendingStoreAmt, true)}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-stone-500 dark:text-stone-400">
+                      Due by {nextDueLabel} · Pay directly to {entry.storeName}&apos;s wallet
+                    </p>
+                  </div>
+                  <div className="flex items-center justify-between sm:justify-end gap-3 shrink-0">
+                    <div className="text-left sm:text-right">
+                      <div className="text-[11px] text-stone-500 dark:text-stone-400">
+                        Balance
+                      </div>
+                      <div className="text-base font-extrabold font-mono tabular-nums text-amber-600 dark:text-amber-400">
+                        {formatPHP(entry.balance, true)}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => openPayStoreModal(entry)}
+                      className="min-h-[40px] px-4 py-2 rounded-xl bg-teal-700 hover:bg-teal-800 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <CreditCard className="w-3.5 h-3.5" />
+                      <span>Pay {entry.storeName}</span>
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Community Debt Breakdown by Seller */}
       {sellerDebtGroups.length > 0 && (
@@ -658,7 +783,7 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
       )}
 
       {/* Simple 3-Step How To Pay Store Debt Guide */}
-      {currentUser.debtBalance > 0 && (
+      {totalUserStoreDebt > 0 && (
         <div className="rounded-2xl border border-teal-200 dark:border-teal-800/70 bg-teal-50/40 dark:bg-teal-950/25 p-4 sm:p-5 space-y-3">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div className="flex items-center gap-2 text-sm font-bold text-stone-900 dark:text-stone-100">
@@ -858,9 +983,13 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
                           >
                             {statusText}
                           </span>
-                          {ord.source === 'marketplace' && (
+                          {ord.source === 'marketplace' ? (
                             <span className="px-2 py-0.5 rounded-md bg-teal-50 dark:bg-teal-950/60 text-teal-800 dark:text-teal-300 text-[11px] font-semibold">
                               Community · Seller: {ord.sellerName ?? 'Coworker'}
+                            </span>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded-md bg-teal-50 dark:bg-teal-950/60 text-teal-800 dark:text-teal-300 text-[11px] font-semibold">
+                              {resolveOrderStoreName(ord)}
                             </span>
                           )}
                           {ord.source === 'marketplace' &&
@@ -1010,13 +1139,13 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
             <button
               type="button"
               onClick={() =>
-                currentUser.debtBalance === 0 && sellerDebtGroups.length > 0
+                totalUserStoreDebt === 0 && sellerDebtGroups.length > 0
                   ? openPaySellerModal(sellerDebtGroups[0])
-                  : openPayModalWithAmount(currentUser.debtBalance)
+                  : openPayStoreModal(storeDebtSummary.byStore[0])
               }
               className="min-h-[36px] px-3.5 py-1.5 rounded-xl bg-teal-700 text-xs font-semibold text-white hover:bg-teal-800 self-start cursor-pointer"
             >
-              {currentUser.debtBalance === 0 && sellerDebtGroups.length > 0
+              {totalUserStoreDebt === 0 && sellerDebtGroups.length > 0
                 ? '+ Pay Community Seller'
                 : '+ Upload Store Receipt'}
             </button>
@@ -1064,7 +1193,11 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
                       <div className="min-w-0 space-y-0.5">
                         <div className="text-sm font-bold text-stone-900 dark:text-stone-100 truncate">
                           {prf.channel} — {prf.purpose}
-                          {isSellerProof && prf.sellerName ? ` (${prf.sellerName})` : ''}
+                          {isSellerProof && prf.sellerName
+                            ? ` (${prf.sellerName})`
+                            : prf.storeName
+                              ? ` (${prf.storeName})`
+                              : ''}
                         </div>
                         <div className="text-xs text-stone-500 dark:text-stone-400 font-mono truncate">
                           Ref: {prf.referenceNo} · {prf.submittedAt}
@@ -1099,8 +1232,8 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
         </div>
       )}
 
-      {/* Submit Payment Proof Modal */}
-      {showPayModal && (
+      {/* Submit Store Payment Proof Modal */}
+      {payingStore && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/60 p-4 backdrop-blur-xs overflow-y-auto">
           <form
             onSubmit={handleProofSubmit}
@@ -1109,20 +1242,44 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h3 className="text-lg font-bold text-stone-900 dark:text-stone-100">
-                  Pay Your Balance
+                  Pay {payingStore.storeName}
                 </h3>
                 <p className="text-xs text-stone-500 dark:text-stone-400">
-                  Send money to the wallet below, then upload your receipt screenshot.
+                  Send money to {payingStore.storeName}&apos;s wallet below, then upload your receipt screenshot.
                 </p>
               </div>
               <button
                 type="button"
-                onClick={() => setShowPayModal(false)}
+                onClick={() => setPayingStore(null)}
                 className="min-h-[40px] min-w-[40px] flex items-center justify-center rounded-lg text-stone-500 dark:text-stone-400 hover:bg-stone-100 dark:hover:bg-stone-800 cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
+
+            {storeDebtSummary.byStore.length > 1 && (
+              <div>
+                <label className="block text-xs font-semibold text-stone-700 dark:text-stone-300 mb-1">
+                  Select Store to Settle
+                </label>
+                <select
+                  value={payingStore.storeId}
+                  onChange={(e) => {
+                    const next = storeDebtSummary.byStore.find(
+                      (b) => b.storeId === e.target.value
+                    );
+                    if (next) openPayStoreModal(next);
+                  }}
+                  className="w-full min-h-[40px] rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-[#172523] px-3 text-xs font-semibold text-stone-900 dark:text-stone-100"
+                >
+                  {storeDebtSummary.byStore.map((b) => (
+                    <option key={b.storeId} value={b.storeId}>
+                      {b.storeName} ({formatPHP(b.balance, true)})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
 
             <div>
               <label className="block text-xs font-semibold text-stone-700 dark:text-stone-300 mb-1">
@@ -1143,7 +1300,7 @@ export const LedgerDashboardView: React.FC<LedgerDashboardViewProps> = ({
                 2. Pick Wallet to Pay
               </label>
               <div className="grid grid-cols-3 gap-2">
-                {digitalMethods.map((ch) => (
+                {activeStoreDigitalMethods.map((ch) => (
                   <button
                     key={ch.id}
                     type="button"

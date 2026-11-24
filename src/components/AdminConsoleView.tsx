@@ -27,7 +27,7 @@ import {
   FulfillmentType,
   LoanRecord,
   MarketplaceListing,
-  PautanganSettings,
+  CashAssistanceSettings,
   PaymentMethod,
   PaymentMethodConfig,
   PaymentProof,
@@ -35,6 +35,7 @@ import {
   StoreConfig,
   StoreItem,
   StoreOrder,
+  StoreProfile,
   UserAccount,
   UserRole,
 } from '../types';
@@ -43,6 +44,7 @@ import {
   computeCommission,
   formatPHP,
   isOrderPendingAdminConfirmation,
+  resolveOrderStoreName,
 } from '../utils/format';
 import { compressImageFileToDataUrl } from '../utils/image';
 import { AdminRestockPanel } from './AdminRestockPanel';
@@ -61,17 +63,18 @@ interface AdminConsoleViewProps {
   proofs: PaymentProof[];
   listings: MarketplaceListing[];
   loans: LoanRecord[];
-  pautanganSettings: PautanganSettings;
+  cashAssistanceSettings: CashAssistanceSettings;
   storeConfig: StoreConfig;
+  stores?: StoreProfile[];
   ownerTotalCommission: number;
   onReviewProof: (proofId: string, decision: 'approved' | 'rejected') => void;
   onReviewListing: (listingId: string, decision: 'approved' | 'rejected') => void;
   onDeleteListing: (listingId: string) => Promise<void> | void;
   onUpdateDueDays: (day1: number, day2: number) => void;
   onSendReminders: () => void;
-  onUpdatePautanganGlobal: (enabled: boolean, rate: number) => void;
-  onUpdatePautanganTerms: (terms: number[]) => void;
-  onToggleUserPautangan: (userId: string, enabled: boolean, limit: number) => void;
+  onUpdateCashAssistanceGlobal: (enabled: boolean, rate: number) => void;
+  onUpdateCashAssistanceTerms: (terms: number[]) => void;
+  onToggleUserCashAssistance: (userId: string, enabled: boolean, limit: number) => void;
   onUpdateUserRole: (userId: string, role: UserRole) => void;
   onAddDeliveryStaff: (name: string, email: string, department: string) => void;
   onUpdateStoreConfig: (next: StoreConfig) => void;
@@ -138,7 +141,7 @@ interface AdminConsoleViewProps {
       | 'stockAdjustments'
       | 'salesOrder'
       | 'config'
-      | 'pautangan'
+      | 'cashAssistance'
       | 'superadmin'
       | 'proofs'
       | 'marketplace'
@@ -157,7 +160,7 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
   proofs,
   listings,
   loans,
-  pautanganSettings,
+  cashAssistanceSettings,
   storeConfig,
   ownerTotalCommission,
   onReviewProof,
@@ -165,9 +168,9 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
   onDeleteListing,
   onUpdateDueDays,
   onSendReminders,
-  onUpdatePautanganGlobal,
-  onUpdatePautanganTerms,
-  onToggleUserPautangan,
+  onUpdateCashAssistanceGlobal,
+  onUpdateCashAssistanceTerms,
+  onToggleUserCashAssistance,
   onUpdateUserRole,
   onAddDeliveryStaff,
   onUpdateStoreConfig,
@@ -194,7 +197,7 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
     | 'stockAdjustments'
     | 'salesOrder'
     | 'config'
-    | 'pautangan'
+    | 'cashAssistance'
     | 'superadmin'
     | 'proofs'
     | 'marketplace'
@@ -210,9 +213,9 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
   }, [requestedSubTab]);
 
   // Store Config & Due Days State
-  const [day1Input, setDay1Input] = useState(String(pautanganSettings.dueDays[0]));
-  const [day2Input, setDay2Input] = useState(String(pautanganSettings.dueDays[1]));
-  const [rateInput, setRateInput] = useState(String(pautanganSettings.monthlyInterestRate));
+  const [day1Input, setDay1Input] = useState(String(cashAssistanceSettings.dueDays[0]));
+  const [day2Input, setDay2Input] = useState(String(cashAssistanceSettings.dueDays[1]));
+  const [rateInput, setRateInput] = useState(String(cashAssistanceSettings.monthlyInterestRate));
   const [newTermMonths, setNewTermMonths] = useState('12');
   const [announcement, setAnnouncement] = useState(storeConfig.storeAnnouncement);
   const [deliveryEnabled, setDeliveryEnabled] = useState(storeConfig.deliveryEnabled);
@@ -222,10 +225,10 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
   const [previewImage, setPreviewImage] = useState<ImagePreviewTarget | null>(null);
 
   useEffect(() => {
-    setDay1Input(String(pautanganSettings.dueDays[0]));
-    setDay2Input(String(pautanganSettings.dueDays[1]));
-    setRateInput(String(pautanganSettings.monthlyInterestRate));
-  }, [pautanganSettings.dueDays, pautanganSettings.monthlyInterestRate]);
+    setDay1Input(String(cashAssistanceSettings.dueDays[0]));
+    setDay2Input(String(cashAssistanceSettings.dueDays[1]));
+    setRateInput(String(cashAssistanceSettings.monthlyInterestRate));
+  }, [cashAssistanceSettings.dueDays, cashAssistanceSettings.monthlyInterestRate]);
 
   useEffect(() => {
     setAnnouncement(storeConfig.storeAnnouncement);
@@ -492,7 +495,7 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
           ]),
       },
       {
-        name: 'Pautangan Loans',
+        name: 'Cash Assistance Loans',
         headers: [
           'Loan ID',
           'Coworker',
@@ -595,7 +598,7 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
             ),
         },
         {
-          heading: '5. Pautangan Cash Assistance Summary',
+          heading: '5. Cash Assistance Summary',
           lines: loans.map(
             (l) =>
               `${l.id} | ${l.userName} | ${l.months} mo @ ${l.interestRate}% | Total: PHP ${l.totalPayable} | Rem: PHP ${l.remainingBalance} | ${l.status}`
@@ -711,12 +714,12 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
           </div>
         </div>
         <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] p-5">
-          <div className="text-xs text-stone-500 dark:text-stone-400">Pautangan Interest Rate</div>
+          <div className="text-xs text-stone-500 dark:text-stone-400">Cash Assistance Interest Rate</div>
           <div className="mt-1 text-xl font-bold text-stone-900 dark:text-stone-100 font-mono tabular-nums">
-            {pautanganSettings.monthlyInterestRate}% / mo
+            {cashAssistanceSettings.monthlyInterestRate}% / mo
           </div>
           <div className="mt-0.5 text-xs text-stone-500 dark:text-stone-400">
-            {users.filter((u) => u.pautanganEnabled).length} of {users.length} users enabled
+            {users.filter((u) => u.cashAssistanceEnabled).length} of {users.length} users enabled
           </div>
         </div>
       </div>
@@ -735,7 +738,7 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                 : 'Sales Order (Walk-In)',
           },
           { id: 'config', label: 'Store & Payments' },
-          { id: 'pautangan', label: 'Cash Assistance' },
+          { id: 'cashAssistance', label: 'Cash Assistance' },
           { id: 'superadmin', label: 'Super Admin: Roles & Delivery' },
           { id: 'proofs', label: `Proofs & Reminders (${pendingProofs.length})` },
           { id: 'marketplace', label: `For-Sale (${pendingListings.length})` },
@@ -1585,16 +1588,16 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
         </div>
       )}
 
-      {/* Tab 3: Cash Assistance (Pautangan) Config, Super Admin Terms & Who Can View */}
-      {subTab === 'pautangan' && (
+      {/* Tab 3: Cash Assistance Config, Super Admin Terms & Who Can View */}
+      {subTab === 'cashAssistance' && (
         <div className="space-y-6">
           <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#121D1B] p-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div>
               <h2 className="text-base font-bold text-stone-900 dark:text-stone-100">
-                Cash Assistance (Pautangan) Interest Rate &amp; Global Visibility
+                Cash Assistance Interest Rate &amp; Global Visibility
               </h2>
               <p className="text-xs text-stone-500 dark:text-stone-400 mt-0.5">
-                Configure monthly interest rate (%) and choose whether Pautangan is visible globally or per coworker.
+                Configure monthly interest rate (%) and choose whether Cash Assistance is visible globally or per coworker.
               </p>
             </div>
 
@@ -1615,8 +1618,8 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                 <button
                   type="button"
                   onClick={() => {
-                    onUpdatePautanganGlobal(
-                      pautanganSettings.globalEnabled,
+                    onUpdateCashAssistanceGlobal(
+                      cashAssistanceSettings.globalEnabled,
                       Math.max(0, Number(rateInput) || 0)
                     );
                     showToast(`Cash Assistance interest rate updated to ${rateInput}% per month.`);
@@ -1630,17 +1633,17 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  const next = !pautanganSettings.globalEnabled;
-                  onUpdatePautanganGlobal(next, pautanganSettings.monthlyInterestRate);
-                  showToast(next ? 'Pautangan enabled globally.' : 'Pautangan paused globally.');
+                  const next = !cashAssistanceSettings.globalEnabled;
+                  onUpdateCashAssistanceGlobal(next, cashAssistanceSettings.monthlyInterestRate);
+                  showToast(next ? 'Cash Assistance enabled globally.' : 'Cash Assistance paused globally.');
                 }}
                 className={`min-h-[40px] rounded-xl px-4 py-2 text-xs font-semibold transition-colors cursor-pointer ${
-                  pautanganSettings.globalEnabled
+                  cashAssistanceSettings.globalEnabled
                     ? 'bg-emerald-600 text-white hover:bg-emerald-700'
                     : 'bg-stone-900 text-white hover:bg-stone-800'
                 }`}
               >
-                {pautanganSettings.globalEnabled
+                {cashAssistanceSettings.globalEnabled
                   ? 'Global Status: Visible & Active'
                   : 'Global Status: Paused'}
               </button>
@@ -1666,7 +1669,7 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              {[...pautanganSettings.availableTerms]
+              {[...cashAssistanceSettings.availableTerms]
                 .sort((a, b) => a - b)
                 .map((term) => (
                   <div
@@ -1676,14 +1679,14 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                     <span>
                       {term} {term === 1 ? 'Month' : 'Months'}
                     </span>
-                    {isSuperAdmin && pautanganSettings.availableTerms.length > 1 && (
+                    {isSuperAdmin && cashAssistanceSettings.availableTerms.length > 1 && (
                       <button
                         type="button"
                         onClick={() => {
-                          onUpdatePautanganTerms(
-                            pautanganSettings.availableTerms.filter((t) => t !== term)
+                          onUpdateCashAssistanceTerms(
+                            cashAssistanceSettings.availableTerms.filter((t) => t !== term)
                           );
-                          showToast(`Removed ${term}-month Pautangan term.`);
+                          showToast(`Removed ${term}-month Cash Assistance term.`);
                         }}
                         className="text-stone-400 hover:text-red-600 cursor-pointer"
                         aria-label={`Remove ${term} month term`}
@@ -1710,8 +1713,8 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                   type="button"
                   onClick={() => {
                     const m = Math.max(1, Math.min(36, Math.round(Number(newTermMonths) || 0)));
-                    if (m > 0 && !pautanganSettings.availableTerms.includes(m)) {
-                      onUpdatePautanganTerms([...pautanganSettings.availableTerms, m]);
+                    if (m > 0 && !cashAssistanceSettings.availableTerms.includes(m)) {
+                      onUpdateCashAssistanceTerms([...cashAssistanceSettings.availableTerms, m]);
                       showToast(`Added ${m}-month repayment term.`);
                     }
                   }}
@@ -1730,7 +1733,7 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                 Who Can View &amp; Borrow Cash Assistance (Per-User Access &amp; Limits)
               </h3>
               <p className="text-xs text-stone-500 dark:text-stone-400">
-                Toggle individual coworker access to view and apply for Pautangan, and edit their credit limit.
+                Toggle individual coworker access to view and apply for Cash Assistance, and edit their credit limit.
               </p>
             </div>
             <div className="overflow-x-auto">
@@ -1761,11 +1764,11 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                           type="number"
                           min="0"
                           step="500"
-                          value={u.pautanganLimit}
+                          value={u.cashAssistanceLimit}
                           onChange={(e) =>
-                            onToggleUserPautangan(
+                            onToggleUserCashAssistance(
                               u.id,
-                              u.pautanganEnabled,
+                              u.cashAssistanceEnabled,
                               Math.max(0, Number(e.target.value) || 0)
                             )
                           }
@@ -1777,20 +1780,24 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                         <button
                           type="button"
                           onClick={() => {
-                            onToggleUserPautangan(u.id, !u.pautanganEnabled, u.pautanganLimit);
+                            onToggleUserCashAssistance(
+                              u.id,
+                              !u.cashAssistanceEnabled,
+                              u.cashAssistanceLimit
+                            );
                             showToast(
                               `${u.name} Cash Assistance access ${
-                                !u.pautanganEnabled ? 'enabled' : 'hidden/disabled'
+                                !u.cashAssistanceEnabled ? 'enabled' : 'hidden/disabled'
                               }.`
                             );
                           }}
                           className={`min-h-[34px] px-3 py-1 rounded-lg text-xs font-semibold cursor-pointer ${
-                            u.pautanganEnabled
+                            u.cashAssistanceEnabled
                               ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800'
                               : 'bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-400 border border-stone-200 dark:border-stone-700'
                           }`}
                         >
-                          {u.pautanganEnabled ? 'Allowed to View & Borrow' : 'Restricted'}
+                          {u.cashAssistanceEnabled ? 'Allowed to View & Borrow' : 'Restricted'}
                         </button>
                       </td>
                     </tr>
@@ -2052,7 +2059,7 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                 Digital Payment Proof Verification Queue
               </h2>
               <p className="text-xs text-stone-500 dark:text-stone-400">
-                Inspect Storefront &amp; Pautangan wallet screenshots before updating customer store balances (Community Seller receipts are verified by each seller).
+                Inspect Storefront &amp; Cash Assistance wallet screenshots before updating customer store balances (Community Seller receipts are verified by each seller).
               </p>
             </div>
 
@@ -2094,6 +2101,7 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
                           {prf.id}
                         </span>{' '}
                         · {prf.channel} · {prf.submittedAt}
+                        {prf.storeName ? ` · ${prf.storeName}` : ''}
                       </div>
                       <h3 className="mt-1 text-base font-bold text-stone-900 dark:text-stone-100">
                         {prf.userName} —{' '}
@@ -2158,7 +2166,7 @@ export const AdminConsoleView: React.FC<AdminConsoleViewProps> = ({
               Send Payment Reminders
             </h3>
             <p className="text-xs text-stone-600 dark:text-stone-400">
-              Notify {users.filter((u) => u.debtBalance > 0).length} coworkers with open store credit balances before the {pautanganSettings.dueDays[0]}th / {pautanganSettings.dueDays[1]}th cutoff.
+              Notify {users.filter((u) => u.debtBalance > 0).length} coworkers with open store credit balances before the {cashAssistanceSettings.dueDays[0]}th / {cashAssistanceSettings.dueDays[1]}th cutoff.
             </p>
             <button
               type="button"
